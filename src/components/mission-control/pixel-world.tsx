@@ -80,6 +80,10 @@ const DESK_BY_WORKER: Record<string, { x: number; y: number }> = {
 // war-room plaza: where agents gather for meetings
 const WAR_ROOM_PLAZA = { x: 1200, y: 800 }
 
+// roads the agents actually walk on (pathing waypoints)
+const ROAD_Y_TOP = GROUND_Y + 300 // 720
+const ROAD_Y_BOTTOM = ROAD_Y_TOP + 290 // 1010
+
 // ── Character state machine ─────────────────────────────────────────────────
 type CharMode = 'idle' | 'walk' | 'work' | 'meeting'
 type CharState = {
@@ -94,12 +98,47 @@ type CharState = {
   bobPhase: number
   bubble: string | null
   bubbleUntil: number
+  bubbleAge: number
+  lastBubble: string
+  route: Array<{ x: number; y: number }> | null
   stuck: boolean
   needsHuman: boolean
   currentTask: string | null
   activeTool: string | null
   statusLabel: string
   errorMsg: string | null
+}
+
+// Send a character somewhere. For long trips they follow the roads via
+// waypoints (up to the nearest horizontal road, along it, then down to the
+// destination) so the town reads as a real place instead of agents cutting
+// through buildings. Short hops walk straight.
+function buildRoute(from: { x: number; y: number }, to: { x: number; y: number }): Array<{ x: number; y: number }> | null {
+  const dist = Math.hypot(to.x - from.x, to.y - from.y)
+  if (dist < 280) return null
+  const roadY = Math.abs(from.y - ROAD_Y_TOP) <= Math.abs(from.y - ROAD_Y_BOTTOM) ? ROAD_Y_TOP : ROAD_Y_BOTTOM
+  const route: Array<{ x: number; y: number }> = []
+  if (Math.abs(from.y - roadY) > 4) route.push({ x: from.x, y: roadY })
+  route.push({ x: to.x, y: roadY })
+  route.push({ x: to.x, y: to.y })
+  return route
+}
+
+function distTo(c: { x: number; y: number }, x: number, y: number): number {
+  return Math.hypot(x - c.x, y - c.y)
+}
+
+function setDestination(c: CharState, x: number, y: number) {
+  const route = buildRoute({ x: c.x, y: c.y }, { x, y })
+  c.route = route
+  if (route && route.length > 0) {
+    c.targetX = route[0].x
+    c.targetY = route[0].y
+  } else {
+    c.targetX = x
+    c.targetY = y
+  }
+  c.mode = 'walk'
 }
 
 const WORKER_IDS = [
@@ -198,14 +237,24 @@ function drawCharacter(ctx: Ctx, c: CharState, time: number) {
 
 function drawBubble(ctx: Ctx, c: CharState, time: number) {
   if (!c.bubble) return
-  const text = c.bubble.length > 42 ? `${c.bubble.slice(0, 40)}…` : c.bubble
-  ctx.font = '9px "JetBrains Mono", monospace'
-  const w = ctx.measureText(text).width + 14
-  const h = 16
+  const maxW = 150
+  const lines = wrapBubbleText(ctx, c.bubble, maxW)
+  const lh = 11
+  const h = 10 + lines.length * lh
+  const w = lines.reduce((m, l) => Math.max(m, ctx.measureText(l).width), 0) + 14
   const bx = Math.max(10, Math.min(c.x - w / 2, WORLD_W - w - 10))
-  const by = c.y - 34 + (c.stuck ? Math.sin(time * 0.004) * 2 : 0)
+  const by = c.y - 34 - (lines.length - 1) * 4 + (c.stuck ? Math.sin(time * 0.004) * 2 : 0)
 
-  ctx.fillStyle = 'rgba(10,14,26,0.92)'
+  // pop-in animation when the message changes (scale from 0.6 → 1, tiny overshoot)
+  const age = c.bubbleAge
+  const pop = age < 200 ? easeOutBack(Math.max(0, Math.min(1, age / 200))) : 1
+
+  ctx.save()
+  ctx.translate(bx + w / 2, by + h / 2)
+  ctx.scale(pop, pop)
+  ctx.translate(-(bx + w / 2), -(by + h / 2))
+
+  ctx.fillStyle = 'rgba(10,14,26,0.94)'
   ctx.strokeStyle = c.stuck ? 'rgba(239,68,68,0.6)' : 'rgba(255,255,255,0.14)'
   ctx.lineWidth = 1
   ctx.beginPath()
@@ -222,11 +271,23 @@ function drawBubble(ctx: Ctx, c: CharState, time: number) {
 
   ctx.fillStyle = c.stuck ? '#fecaca' : c.needsHuman ? '#ddd6fe' : '#e5e7eb'
   ctx.textAlign = 'center'
-  ctx.fillText(text, bx + w / 2, by + 12)
+  ctx.font = '9px "JetBrains Mono", monospace'
+  lines.forEach((line, i) => {
+    ctx.fillText(line, bx + w / 2, by + 12 + i * lh)
+  })
+  ctx.restore()
 }
 
-function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number) {
+function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number, hoveredId: string | null, mission: boolean) {
   const { x, y, w, h } = b
+
+  // hover glow — soft halo + brighter outline so offices feel interactive
+  if (hoveredId === b.id) {
+    ctx.fillStyle = 'rgba(255,255,255,0.045)'
+    ctx.beginPath()
+    ctx.roundRect(x - 12, y - 12, w + 24, h + 24, 12)
+    ctx.fill()
+  }
 
   // ground shadow
   ctx.fillStyle = 'rgba(0,0,0,0.28)'
@@ -239,8 +300,8 @@ function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number) {
   ctx.beginPath()
   ctx.roundRect(x, y, w, h, 4)
   ctx.fill()
-  ctx.strokeStyle = 'rgba(255,255,255,0.08)'
-  ctx.lineWidth = 1
+  ctx.strokeStyle = hoveredId === b.id ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.08)'
+  ctx.lineWidth = hoveredId === b.id ? 1.5 : 1
   ctx.stroke()
 
   // roof
@@ -261,10 +322,10 @@ function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number) {
   ctx.closePath()
   ctx.fill()
 
-  // war room antenna + beacon
+  // war room antenna + beacon (beacon races when a mission is live)
   if (b.isWarRoom) {
     px(ctx, x + w / 2 - 1, y - 52, 2, 26, '#2a3040')
-    const blink = Math.sin(time * 0.006) > 0.4
+    const blink = Math.sin(time * (mission ? 0.014 : 0.006)) > 0.4
     px(ctx, x + w / 2 - 2, y - 56, 4, 4, blink ? '#818cf8' : '#3730a3')
     // side lights
     px(ctx, x + 20, y + h - 18, 14, 4, blink ? '#818cf8' : '#3b2f6b')
@@ -278,13 +339,12 @@ function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number) {
   ctx.fill()
   px(ctx, x + w / 2 + 2, y + h - 14, 3, 3, '#f59e0b')
 
-  // windows — glow at night / when lit
+  // windows — warm light that fades in as night falls
   const winY = y + 34
-  const winColors = ['#0e1420', '#0e1420', '#0e1420']
+  const winGlow = b.isWarRoom ? 0.9 : 0.1 + 0.8 * night
   for (let i = 0; i < 3; i++) {
     const wx = x + 22 + i * (w - 44) / 2
-    const lit = night > 0.5 || b.isWarRoom
-    ctx.fillStyle = lit ? 'rgba(245,158,11,0.85)' : winColors[i]
+    ctx.fillStyle = `rgba(245,158,11,${winGlow})`
     ctx.fillRect(wx, winY, 26, 18)
     ctx.strokeStyle = 'rgba(255,255,255,0.07)'
     ctx.strokeRect(wx, winY, 26, 18)
@@ -351,6 +411,10 @@ export function PixelWorld({
   const [paused, setPaused] = useState(false)
   const pausedRef = useRef(false)
   pausedRef.current = paused
+  // live prop mirrors for use inside the rAF loop (which has [] deps)
+  const missionRunningRef = useRef(missionRunning)
+  missionRunningRef.current = missionRunning
+  const hoveredBuildingRef = useRef<string | null>(null)
 
   // camera helpers
   const camToWorld = useCallback((sx: number, sy: number) => {
@@ -380,6 +444,9 @@ export function PixelWorld({
         bobPhase: Math.random() * 10,
         bubble: 'standing by',
         bubbleUntil: 0,
+        bubbleAge: 999,
+        lastBubble: 'standing by',
+        route: null,
         stuck: false,
         needsHuman: false,
         currentTask: null,
@@ -393,9 +460,7 @@ export function PixelWorld({
       setTimeout(() => {
         const ch = charsRef.current[i]
         if (ch) {
-          ch.targetX = WAR_ROOM_PLAZA.x + (Math.random() * 160 - 80)
-          ch.targetY = WAR_ROOM_PLAZA.y + (Math.random() * 120 - 60)
-          ch.mode = 'walk'
+          setDestination(ch, WAR_ROOM_PLAZA.x + (Math.random() * 160 - 80), WAR_ROOM_PLAZA.y + (Math.random() * 120 - 60))
           ch.bubble = 'standup — reporting in'
         }
       }, 300 + i * 140)
@@ -443,23 +508,22 @@ export function PixelWorld({
 
       // behavior: active workers walk to war room (meeting) or work at desk.
       // When a Conductor mission is running, everyone gathers at the war room.
+      // Long trips follow the roads via waypoints.
       if (missionRunning) {
-        ch.targetX = WAR_ROOM_PLAZA.x + (Math.random() * 200 - 100)
-        ch.targetY = WAR_ROOM_PLAZA.y + (Math.random() * 140 - 70)
-        ch.mode = 'walk'
+        setDestination(ch, WAR_ROOM_PLAZA.x + (Math.random() * 200 - 100), WAR_ROOM_PLAZA.y + (Math.random() * 140 - 70))
       } else if (status === 'active' || status === 'approval') {
         if (Math.random() < 0.5) {
-          ch.targetX = WAR_ROOM_PLAZA.x + (Math.random() * 200 - 100)
-          ch.targetY = WAR_ROOM_PLAZA.y + (Math.random() * 140 - 70)
-          ch.mode = 'walk'
+          setDestination(ch, WAR_ROOM_PLAZA.x + (Math.random() * 200 - 100), WAR_ROOM_PLAZA.y + (Math.random() * 140 - 70))
+        } else if (distTo(ch, desk.x, desk.y) > 2) {
+          setDestination(ch, desk.x, desk.y)
         } else {
-          ch.targetX = desk.x
-          ch.targetY = desk.y
+          ch.route = null
           ch.mode = 'work'
         }
+      } else if (distTo(ch, desk.x, desk.y) > 2) {
+        setDestination(ch, desk.x, desk.y)
       } else {
-        ch.targetX = desk.x
-        ch.targetY = desk.y
+        ch.route = null
         ch.mode = ch.mode === 'walk' ? 'walk' : 'idle'
       }
     }
@@ -474,6 +538,17 @@ export function PixelWorld({
 
     let last = performance.now()
 
+    // pause the whole town when the tab is hidden — no point burning CPU on
+    // an invisible canvas, and the loop restarts cleanly on return
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(rafRef.current)
+      } else {
+        last = performance.now()
+        rafRef.current = requestAnimationFrame(frame)
+      }
+    }
+
     const frame = (t: number) => {
       // paused: keep last frame, no updates (freeze the town)
       if (pausedRef.current) {
@@ -483,59 +558,93 @@ export function PixelWorld({
       const dt = Math.min(32, t - last)
       last = t
       timeRef.current = t
-      // day/night: ~2.5 min cycle
+      // day/night: ~2.5 min cycle with SMOOTH transitions (fade in/out,
+      // no hard snap) — dusk 0.55→0.75, night holds, dawn 0.88→0.98
       const cycle = (t % 150000) / 150000
-      nightRef.current = cycle > 0.55 && cycle < 0.95 ? (cycle - 0.55) / 0.4 : 0
+      let nightLevel = 0
+      if (cycle > 0.55 && cycle < 0.75) nightLevel = smoothstep01((cycle - 0.55) / 0.2)
+      else if (cycle >= 0.75 && cycle <= 0.88) nightLevel = 1
+      else if (cycle > 0.88 && cycle < 0.98) nightLevel = 1 - smoothstep01((cycle - 0.88) / 0.1)
+      nightRef.current = nightLevel
 
       // update characters
       const chars = charsRef.current
       const now = Date.now()
       for (const c of chars) {
         c.bobPhase += dt * 0.004
-        const dx = c.targetX - c.x
-        const dy = c.targetY - c.y
-        const dist = Math.hypot(dx, dy)
+
+        // bubble pop-in tracking: reset the age whenever the message changes
+        if (c.bubble !== c.lastBubble) {
+          c.lastBubble = c.bubble ?? ''
+          c.bubbleAge = 0
+        } else {
+          c.bubbleAge += dt
+        }
+
         const speed = 0.11 * dt // ~66 px/s at 60fps
 
-        if (dist > 2) {
-          c.mode = c.mode === 'idle' ? 'walk' : c.mode
-          c.x += (dx / dist) * speed
-          c.y += (dy / dist) * speed
-          c.walkPhase += dt * 0.012
-          c.faceDir = Math.abs(dx) > 2 ? (dx > 0 ? 1 : -1) : c.faceDir
-        } else if (c.mode === 'walk') {
-          c.x = c.targetX
-          c.y = c.targetY
-          // arrived: decide what to do at destination
-          const nearDesk = DESK_BY_WORKER[c.workerId]
-          const atDesk = nearDesk && Math.hypot(c.x - nearDesk.x, c.y - nearDesk.y) < 40
-          const atPlaza = Math.hypot(c.x - WAR_ROOM_PLAZA.x, c.y - WAR_ROOM_PLAZA.y) < 200
-          if (atDesk) {
-            c.mode = c.stuck ? 'idle' : c.statusLabel === 'active' ? 'work' : 'idle'
-          } else if (atPlaza) {
-            c.mode = 'meeting'
-            c.bubble = c.bubbleUntil < now ? 'meeting in the war room' : c.bubble
-            // drift around plaza while meeting
-            if (Math.random() < 0.01) {
-              c.targetX = WAR_ROOM_PLAZA.x + (Math.random() * 220 - 110)
-              c.targetY = WAR_ROOM_PLAZA.y + (Math.random() * 160 - 80)
-            }
+        // waypoint-following: walk along the roads toward the next waypoint
+        if (c.route && c.route.length > 0) {
+          const wp = c.route[0]
+          const wdx = wp.x - c.x
+          const wdy = wp.y - c.y
+          const wdist = Math.hypot(wdx, wdy)
+          if (wdist > 2) {
+            c.mode = 'walk'
+            c.x += (wdx / wdist) * speed
+            c.y += (wdy / wdist) * speed
+            c.walkPhase += dt * 0.012
+            c.faceDir = Math.abs(wdx) > 2 ? (wdx > 0 ? 1 : -1) : c.faceDir
           } else {
-            c.mode = 'idle'
+            c.x = wp.x
+            c.y = wp.y
+            c.route.shift()
+            if (c.route.length === 0) c.route = null
           }
-        } else if (c.mode === 'work' || c.mode === 'meeting') {
-          c.walkPhase += dt * 0.008
-          // occasional tool flash
-          if (c.activeTool && Math.random() < 0.002) {
-            c.bubble = `using ${c.activeTool}`
-            c.bubbleUntil = now + 4000
+        } else {
+          const dx = c.targetX - c.x
+          const dy = c.targetY - c.y
+          const dist = Math.hypot(dx, dy)
+
+          if (dist > 2) {
+            c.mode = c.mode === 'idle' ? 'walk' : c.mode
+            c.x += (dx / dist) * speed
+            c.y += (dy / dist) * speed
+            c.walkPhase += dt * 0.012
+            c.faceDir = Math.abs(dx) > 2 ? (dx > 0 ? 1 : -1) : c.faceDir
+          } else if (c.mode === 'walk') {
+            c.x = c.targetX
+            c.y = c.targetY
+            // arrived: decide what to do at destination
+            const nearDesk = DESK_BY_WORKER[c.workerId]
+            const atDesk = nearDesk && Math.hypot(c.x - nearDesk.x, c.y - nearDesk.y) < 40
+            const atPlaza = Math.hypot(c.x - WAR_ROOM_PLAZA.x, c.y - WAR_ROOM_PLAZA.y) < 200
+            if (atDesk) {
+              c.mode = c.stuck ? 'idle' : c.statusLabel === 'active' ? 'work' : 'idle'
+            } else if (atPlaza) {
+              c.mode = 'meeting'
+              c.bubble = c.bubbleUntil < now ? 'meeting in the war room' : c.bubble
+              // drift around plaza while meeting
+              if (Math.random() < 0.01) {
+                c.targetX = WAR_ROOM_PLAZA.x + (Math.random() * 220 - 110)
+                c.targetY = WAR_ROOM_PLAZA.y + (Math.random() * 160 - 80)
+              }
+            } else {
+              c.mode = 'idle'
+            }
+          } else if (c.mode === 'work' || c.mode === 'meeting') {
+            c.walkPhase += dt * 0.008
+            // occasional tool flash
+            if (c.activeTool && Math.random() < 0.002) {
+              c.bubble = `using ${c.activeTool}`
+              c.bubbleUntil = now + 4000
+            }
           }
         }
         // expire bubbles
         if (c.bubbleUntil < now && !c.stuck) {
           c.bubble = c.statusLabel === 'active' ? 'working' : 'standing by'
         }
-        if (c.stuck) c.bubble = 'stuck'
       }
 
       // render
@@ -624,13 +733,14 @@ export function PixelWorld({
       for (const bx of [180, 420, 1980, 2220]) {
         ctx.fillRect(bx - 22, GROUND_Y, 44, WORLD_H - GROUND_Y)
       }
-      // plaza
-      ctx.fillStyle = 'rgba(99,102,241,0.10)'
+      // plaza — ring shifts to emerald and pulses when a mission is live
+      const mission = missionRunningRef.current
+      ctx.fillStyle = mission ? 'rgba(16,185,129,0.12)' : 'rgba(99,102,241,0.10)'
       ctx.beginPath()
       ctx.arc(WAR_ROOM_PLAZA.x, WAR_ROOM_PLAZA.y, 240, 0, Math.PI * 2)
       ctx.fill()
-      ctx.strokeStyle = 'rgba(99,102,241,0.25)'
-      ctx.lineWidth = 2
+      ctx.strokeStyle = mission ? `rgba(16,185,129,${0.35 + 0.2 * Math.sin(t * 0.005)})` : 'rgba(99,102,241,0.25)'
+      ctx.lineWidth = mission ? 2.5 : 2
       ctx.setLineDash([10, 8])
       ctx.beginPath()
       ctx.arc(WAR_ROOM_PLAZA.x, WAR_ROOM_PLAZA.y, 240, 0, Math.PI * 2)
@@ -668,7 +778,32 @@ export function PixelWorld({
 
       // buildings
       for (const b of BUILDINGS) {
-        drawBuilding(ctx, b, t, night)
+        drawBuilding(ctx, b, t, night, hoveredBuildingRef.current, mission)
+      }
+
+      // mission banner above the war room when a Conductor mission is live
+      if (mission) {
+        const bw = 240
+        const bh = 26
+        const bx = WAR_ROOM_PLAZA.x - bw / 2
+        const by = 452 - bh - 8
+        const pulse = 0.75 + 0.25 * Math.sin(t * 0.005)
+        // soft glow behind the banner
+        ctx.fillStyle = `rgba(16,185,129,${0.12 * pulse})`
+        ctx.beginPath()
+        ctx.roundRect(bx - 14, by - 10, bw + 28, bh + 20, 12)
+        ctx.fill()
+        ctx.fillStyle = 'rgba(6,20,14,0.92)'
+        ctx.beginPath()
+        ctx.roundRect(bx, by, bw, bh, 7)
+        ctx.fill()
+        ctx.strokeStyle = `rgba(52,211,153,${0.55 + 0.3 * Math.sin(t * 0.005)})`
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+        ctx.font = '700 12px "JetBrains Mono", monospace'
+        ctx.textAlign = 'center'
+        ctx.fillStyle = '#a7f3d0'
+        ctx.fillText(`◈ MISSION ACTIVE ◈`, WAR_ROOM_PLAZA.x, by + 17)
       }
 
       // ambient particles: fireflies at night, dust motes by day
@@ -701,10 +836,10 @@ export function PixelWorld({
         drawBubble(ctx, c, t)
       }
 
-      // war room label under it
+      // war room label under it — emerald while a mission is live
       ctx.font = '700 14px "JetBrains Mono", monospace'
       ctx.textAlign = 'center'
-      ctx.fillStyle = 'rgba(199,210,254,0.9)'
+      ctx.fillStyle = mission ? 'rgba(110,231,183,0.95)' : 'rgba(199,210,254,0.9)'
       ctx.fillText('◈ HERMES WAR ROOM ◈', 1200, 470)
 
       ctx.restore()
@@ -712,8 +847,12 @@ export function PixelWorld({
       rafRef.current = requestAnimationFrame(frame)
     }
 
+    document.addEventListener('visibilitychange', onVisibility)
     rafRef.current = requestAnimationFrame(frame)
-    return () => cancelAnimationFrame(rafRef.current)
+    return () => {
+      cancelAnimationFrame(rafRef.current)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [])
 
   // hover + click hit testing (throttled to hover state)
@@ -740,6 +879,16 @@ export function PixelWorld({
         }
       }
       setHovered(best)
+
+      // hit test buildings (for the hover glow)
+      let hoveredBuilding: string | null = null
+      for (const b of BUILDINGS) {
+        if (w.x >= b.x && w.x <= b.x + b.w && w.y >= b.y && w.y <= b.y + b.h) {
+          hoveredBuilding = b.id
+          break
+        }
+      }
+      hoveredBuildingRef.current = hoveredBuilding
     },
     [camToWorld],
   )
@@ -794,9 +943,36 @@ export function PixelWorld({
   }, [])
 
   const resetCamera = useCallback(() => {
+    // in the Conductor embed, reset to the fitted framing instead of full-world
+    if (embedded) {
+      const rect = wrapRef.current?.getBoundingClientRect()
+      if (rect && rect.width > 0) {
+        const scale = Math.max(0.35, Math.min(0.9, Math.min(rect.width / 1100, rect.height / 500)))
+        cameraRef.current = { x: -1200 * scale, y: -650 * scale, scale }
+        setZoom(scale)
+        return
+      }
+    }
     cameraRef.current = { x: 0, y: 0, scale: 0.55 }
     setZoom(0.55)
-  }, [])
+  }, [embedded])
+
+  // fit the camera to the Conductor's narrower embed on mount + resize:
+  // frame the war room, plaza and inner offices rather than the map's corner
+  useEffect(() => {
+    if (!embedded) return
+    const fit = () => {
+      const rect = wrapRef.current?.getBoundingClientRect()
+      if (!rect || rect.width === 0) return
+      const scale = Math.max(0.35, Math.min(0.9, Math.min(rect.width / 1100, rect.height / 500)))
+      cameraRef.current = { x: -1200 * scale, y: -650 * scale, scale }
+      setZoom(scale)
+    }
+    fit()
+    const ro = new ResizeObserver(fit)
+    if (wrapRef.current) ro.observe(wrapRef.current)
+    return () => ro.disconnect()
+  }, [embedded])
 
   const selectedWorker = useMemo(() => {
     if (!selected) return null
@@ -862,6 +1038,7 @@ export function PixelWorld({
         onMouseMove={handleMouseMove}
         onMouseLeave={() => {
           mouseRef.current.inside = false
+          hoveredBuildingRef.current = null
           setHovered(null)
         }}
         onClick={handleClick}
@@ -1016,4 +1193,42 @@ function mixColor(a: string, b: string, t: number): string {
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const n = parseInt(hex.replace('#', ''), 16)
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+}
+
+// ── easing / text helpers ───────────────────────────────────────────────────
+
+function smoothstep01(t: number): number {
+  return t * t * (3 - 2 * t)
+}
+
+// easeOutBack — small overshoot for the speech-bubble pop-in
+function easeOutBack(t: number): number {
+  const c1 = 1.70158
+  const c3 = c1 + 1
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2)
+}
+
+// word-wrap bubble text to at most 3 lines; the last line gets an ellipsis
+function wrapBubbleText(ctx: Ctx, text: string, maxW: number): string[] {
+  ctx.font = '9px "JetBrains Mono", monospace'
+  const words = text.split(/\s+/)
+  const lines: string[] = []
+  let cur = ''
+  for (const w of words) {
+    const t = cur ? `${cur} ${w}` : w
+    if (ctx.measureText(t).width <= maxW || !cur) {
+      cur = t
+    } else {
+      lines.push(cur)
+      cur = w
+    }
+  }
+  if (cur) lines.push(cur)
+  if (lines.length > 3) {
+    lines.length = 3
+    let last = lines[2]
+    while (last.length > 0 && ctx.measureText(`${last}…`).width > maxW) last = last.slice(0, -1)
+    lines[2] = `${last}…`
+  }
+  return lines
 }

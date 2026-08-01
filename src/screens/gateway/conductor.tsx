@@ -1395,7 +1395,7 @@ export function Conductor() {
 
             <section className={cn('overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] shadow-[0_24px_80px_var(--theme-shadow)]', conductorView === 'world' ? 'h-[320px] md:h-[520px]' : 'h-[280px] md:h-[520px]')}>
               {conductorView === 'world' ? (
-                <PixelWorld embedded missionRunning={false} />
+                <PixelWorld embedded missionRunning={homeOfficeRows.some((a) => a.status === 'active')} />
               ) : (
                 <OfficeView
                   agentRows={homeOfficeRows}

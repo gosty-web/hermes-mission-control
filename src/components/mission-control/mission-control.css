@@ -1,0 +1,97 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Mission Control — Apple-grade polish on Linear-dark canvas
+   Tokens from the design brief §5, refined with glassmorphism surfaces,
+   SF-Pro-feel Inter tracking, and subtle depth via luminance, not shadows.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.mission-control-root {
+  /* surfaces: luminance-stacked + translucent glass */
+  --mc-bg: #0a0e1a;
+  --mc-panel: rgba(15, 20, 32, 0.72);
+  --mc-surface: rgba(255, 255, 255, 0.02);
+  --mc-surface-2: rgba(255, 255, 255, 0.045);
+  --mc-border: rgba(255, 255, 255, 0.08);
+  --mc-border-sub: rgba(255, 255, 255, 0.05);
+
+  /* text: 4 tiers */
+  --mc-text: #f0f2f7;
+  --mc-text-2: #b6bdcb;
+  --mc-text-3: #7d8597;
+  --mc-text-4: #5a6172;
+
+  background: var(--mc-bg);
+  font-family:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'SF Pro Display',
+    system-ui,
+    sans-serif;
+  font-feature-settings: 'cv01', 'ss03';
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
+}
+
+/* thin translucent scrollbars for dense panels */
+.mission-scroll::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.mission-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.mission-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+}
+.mission-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* glass panel base */
+.mc-glass {
+  background: var(--mc-surface);
+  border: 1px solid var(--mc-border);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+}
+
+/* status dot pulse for active */
+@keyframes mc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.mc-dot-active {
+  animation: mc-pulse 2s ease-in-out infinite;
+}
+
+/* subtle gradient hairline under sticky header */
+.mc-header-glow {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.06), transparent);
+}
+
+/* light mode (Apple-bright) — tasteful, kept restrained */
+.mission-control-root[data-mc-theme='light'] {
+  --mc-bg: #f5f6f8;
+  --mc-panel: rgba(255, 255, 255, 0.8);
+  --mc-surface: rgba(255, 255, 255, 0.6);
+  --mc-surface-2: rgba(255, 255, 255, 0.75);
+  --mc-border: rgba(0, 0, 0, 0.08);
+  --mc-border-sub: rgba(0, 0, 0, 0.05);
+  --mc-text: #17181c;
+  --mc-text-2: #4b5058;
+  --mc-text-3: #6e7480;
+  --mc-text-4: #9aa0ab;
+  background: var(--mc-bg);
+}

@@ -7,12 +7,14 @@ import { WorkflowHelpModal } from '@/components/workflow-help-modal'
 import { Markdown } from '@/components/prompt-kit/markdown'
 import { OfficeView } from './components/office-view'
 import type { AgentWorkingRow } from './components/agents-working-panel'
+import { PixelWorld } from '@/components/mission-control/pixel-world'
 import { type GatewaySession } from '@/lib/gateway-api'
 import { cn } from '@/lib/utils'
 import { type MissionHistoryEntry, type MissionHistoryWorkerDetail, useConductorGateway } from './hooks/use-conductor-gateway'
 
 type ConductorPhase = 'home' | 'preview' | 'active' | 'complete'
 type QuickActionId = 'research' | 'build' | 'review' | 'deploy'
+type ConductorView = 'offices' | 'world'
 
 type HistoryMessage = {
   role?: string
@@ -134,6 +136,40 @@ function estimateTokenCost(totalTokens: number): number {
 
 function formatUsd(value: number): string {
   return `$${value.toFixed(value >= 0.1 ? 2 : 3)}`
+}
+
+function WorldViewToggle({
+  view,
+  onChange,
+}: {
+  view: ConductorView
+  onChange: (view: ConductorView) => void
+}) {
+  return (
+    <div className="inline-flex items-center gap-0.5 rounded-full border border-[var(--theme-border)] bg-[var(--theme-card)] p-1 shadow-[0_8px_30px_var(--theme-shadow)]">
+      {(
+        [
+          { id: 'offices', label: 'Offices' },
+          { id: 'world', label: 'World' },
+        ] as const
+      ).map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          onClick={() => onChange(option.id)}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-full px-3.5 py-1 text-xs font-medium transition-colors',
+            view === option.id
+              ? 'bg-[var(--theme-accent)] text-[var(--theme-on-accent, white)]'
+              : 'text-[var(--theme-muted)] hover:text-[var(--theme-text)]',
+          )}
+        >
+          <span aria-hidden>{option.id === 'offices' ? '🏢' : '🌍'}</span>
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 function MissionCostSection({ totalTokens, workers, expanded, onToggle }: { totalTokens: number; workers: MissionCostWorker[]; expanded: boolean; onToggle: () => void }) {
@@ -722,6 +758,7 @@ export function Conductor() {
   const [activityPage, setActivityPage] = useState(0)
   const [completeCostExpanded, setCompleteCostExpanded] = useState(true)
   const [historyCostExpanded, setHistoryCostExpanded] = useState(false)
+  const [conductorView, setConductorView] = useState<ConductorView>('offices')
   const [now, setNow] = useState(() => Date.now())
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false)
@@ -1352,16 +1389,24 @@ export function Conductor() {
               <p className="text-sm text-[var(--theme-muted-2)]">Launch a mission and watch your agent team build it live.</p>
             </div>
 
-            <section className="h-[280px] overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] shadow-[0_24px_80px_var(--theme-shadow)] md:h-[520px]">
-              <OfficeView
-                agentRows={homeOfficeRows}
-                missionRunning={homeOfficeRows.some((a) => a.status === 'active')}
-                onViewOutput={() => {}}
-                processType="parallel"
-                companyName=""
-                containerHeight={520}
-                hideHeader
-              />
+            <div className="flex justify-center">
+              <WorldViewToggle view={conductorView} onChange={setConductorView} />
+            </div>
+
+            <section className={cn('overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] shadow-[0_24px_80px_var(--theme-shadow)]', conductorView === 'world' ? 'h-[320px] md:h-[520px]' : 'h-[280px] md:h-[520px]')}>
+              {conductorView === 'world' ? (
+                <PixelWorld embedded missionRunning={false} />
+              ) : (
+                <OfficeView
+                  agentRows={homeOfficeRows}
+                  missionRunning={homeOfficeRows.some((a) => a.status === 'active')}
+                  onViewOutput={() => {}}
+                  processType="parallel"
+                  companyName=""
+                  containerHeight={520}
+                  hideHeader
+                />
+              )}
             </section>
 
             {hasMissionHistory || conductor.recentSessions.length > 0 ? (
@@ -2316,8 +2361,15 @@ export function Conductor() {
               </div>
             </section>
           )}
-          <section className="max-h-[clamp(200px,40vh,360px)] overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] shadow-[0_24px_80px_var(--theme-shadow)]">
-            <OfficeView agentRows={officeAgentRows} missionRunning onViewOutput={() => {}} processType="parallel" companyName="Conductor Office" containerHeight={360} hideHeader />
+          <div className="flex justify-center">
+            <WorldViewToggle view={conductorView} onChange={setConductorView} />
+          </div>
+          <section className={cn('overflow-hidden rounded-3xl border border-[var(--theme-border)] bg-[var(--theme-card)] shadow-[0_24px_80px_var(--theme-shadow)]', conductorView === 'world' ? 'h-[clamp(260px,46vh,440px)]' : 'max-h-[clamp(200px,40vh,360px)]')}>
+            {conductorView === 'world' ? (
+              <PixelWorld embedded missionRunning={phase === 'active' && !conductor.isPaused} />
+            ) : (
+              <OfficeView agentRows={officeAgentRows} missionRunning onViewOutput={() => {}} processType="parallel" companyName="Conductor Office" containerHeight={360} hideHeader />
+            )}
           </section>
 
           {conductor.tasks.length > 0 ? (

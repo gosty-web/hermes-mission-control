@@ -26,6 +26,7 @@ import { Swarm2Wires } from './swarm2-wires'
 import { Swarm2ActivityFeed } from './swarm2-activity-feed'
 import { Swarm2KanbanBoard } from './swarm2-kanban-board'
 import { Swarm2ReportsView, buildSwarm2InboxLanes, type Swarm2InboxItem } from './swarm2-reports-view'
+import { SwarmMissionPulse } from '@/components/mission-control/swarm-mission-pulse'
 import { RouterChat } from '@/components/swarm/router-chat'
 import { SwarmTerminal } from '@/components/swarm/swarm-terminal'
 import { WorkflowHelpModal } from '@/components/workflow-help-modal'
@@ -1645,6 +1646,10 @@ export function Swarm2Screen() {
             onScrollTmuxSession={(workerId, direction, session) => { void scrollTmuxSession(workerId, direction, session) }}
           />
         </div>
+
+        {/* Mission pulse: worker grid + approval inbox + sessions + kanban
+            folded into the existing Swarm screen (no new top-level section). */}
+        <SwarmMissionPulse />
 
         {viewMode === 'cards' && members.length > 0 ? (
           <Swarm2ActivityFeed

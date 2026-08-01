@@ -38,6 +38,7 @@ import { SkillsUsageCard } from './components/skills-usage-card'
 import { TokenMixHourCard } from './components/token-mix-hour-card'
 import { TopModelsCard } from './components/top-models-card'
 import { VelocityCard } from './components/velocity-card'
+import { DashboardMissionPulse } from '@/components/mission-control/dashboard-mission-pulse'
 import { WidgetShell } from './components/widget-shell'
 import { normalizeDashboardSessionsPayload } from './lib/sessions-query'
 import { useDashboardLayout } from './lib/use-dashboard-layout'
@@ -1055,6 +1056,10 @@ export function DashboardScreen() {
 
       {/* ── Edit-mode banner (only renders when toggled). ── */}
       <EditModePanel layout={layout} />
+
+      {/* ── Mission pulse: mission-control widgets folded into the dashboard
+           (host metrics + KPIs + live activity on the dark Linear canvas). ── */}
+      <DashboardMissionPulse />
 
       {/* ── Analytics chart (left) + Top models / Provider mix / Cache
            efficiency stacked on the right. The right-side stack now

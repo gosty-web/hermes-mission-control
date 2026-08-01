@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { usePageTitle } from '@/hooks/use-page-title'
-import { HermesWorldLanding } from '@/screens/playground/hermes-world-landing'
+import { PixelWorld } from '@/components/mission-control/pixel-world'
 
 export const Route = createFileRoute('/world')({
   ssr: false,
@@ -8,6 +8,6 @@ export const Route = createFileRoute('/world')({
 })
 
 function WorldRoute() {
-  usePageTitle('HermesWorld — AI Agent RPG')
-  return <HermesWorldLanding />
+  usePageTitle('Pixel World — Swarm Town')
+  return <PixelWorld />
 }

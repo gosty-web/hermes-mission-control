@@ -262,7 +262,7 @@ function drawCharacter(ctx: Ctx, c: CharState, time: number) {
 }
 
 // measure a bubble's rect + wrapped lines (font must be set by caller context)
-function bubbleRect(ctx: Ctx, c: CharState): { bx: number; by: number; w: number; h: number; lines: string[] } {
+function bubbleRect(ctx: Ctx, c: CharState): { bx: number; by: number; w: number; h: number; lines: Array<string> } {
   const maxW = 150
   const lines = wrapBubbleText(ctx, c.bubble ?? '', maxW)
   const lh = 11
@@ -287,7 +287,7 @@ function stackBubbleRects(rects: Array<{ c: CharState; r: ReturnType<typeof bubb
   }
 }
 
-function drawBubbleAt(ctx: Ctx, c: CharState, r: { bx: number; by: number; w: number; h: number; lines: string[] }, time: number) {
+function drawBubbleAt(ctx: Ctx, c: CharState, r: { bx: number; by: number; w: number; h: number; lines: Array<string> }, time: number) {
   const { bx, w, h, lines } = r
   const by = r.by + (c.stuck ? Math.sin(time * 0.004) * 2 : 0)
 
@@ -488,7 +488,7 @@ export function PixelWorld({
     cy: 0,
   })
   const rafRef = useRef<number>(0)
-  const particlesRef = useRef<DustParticle[]>([])
+  const particlesRef = useRef<Array<DustParticle>>([])
   // frame-time EMA → adaptive quality (drops particle counts when the box
   // is struggling, so the loop stays smooth on low-RAM hosts)
   const perfRef = useRef({ ema: 16, quality: 1 })
@@ -1092,15 +1092,15 @@ export function PixelWorld({
       setHovered(best)
 
       // hit test buildings (for the hover glow)
-      let hoveredBuilding: string | null = null
+      let hitBuilding: string | null = null
       for (const b of BUILDINGS) {
         if (w.x >= b.x && w.x <= b.x + b.w && w.y >= b.y && w.y <= b.y + b.h) {
-          hoveredBuilding = b.id
+          hitBuilding = b.id
           break
         }
       }
-      hoveredBuildingRef.current = hoveredBuilding
-      setHoveredBuilding((prev) => (prev === hoveredBuilding ? prev : hoveredBuilding))
+      hoveredBuildingRef.current = hitBuilding
+      setHoveredBuilding((prev) => (prev === hitBuilding ? prev : hitBuilding))
     },
     [camToWorld],
   )
@@ -1449,11 +1449,11 @@ export function PixelWorld({
                     </div>
                   </div>
                 )}
-                {selectedWorker.h && (selectedWorker.h.capabilities?.length ?? 0) > 0 && (
+                {selectedWorker.h && selectedWorker.h.capabilities.length > 0 && (
                   <div>
                     <div className="text-[9px] font-semibold uppercase tracking-wider text-[#5a6172]">Capabilities</div>
                     <div className="mt-1 flex flex-wrap gap-1">
-                      {(selectedWorker.h.capabilities ?? []).slice(0, 6).map((c: string) => (
+                      {selectedWorker.h.capabilities.slice(0, 6).map((c: string) => (
                         <span key={c} className="rounded border border-white/[0.07] px-1.5 py-px text-[9px] text-[#7d8597]">
                           {c}
                         </span>

@@ -278,7 +278,7 @@ function drawBubble(ctx: Ctx, c: CharState, time: number) {
   ctx.restore()
 }
 
-function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number, hoveredId: string | null, mission: boolean) {
+function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number, hoveredId: string | null, mission: boolean, statusById: Record<string, string>) {
   const { x, y, w, h } = b
 
   // hover glow — soft halo + brighter outline so offices feel interactive
@@ -362,14 +362,21 @@ function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number, hov
   ctx.fillStyle = b.isWarRoom ? '#c7d2fe' : 'rgba(255,255,255,0.75)'
   ctx.fillText(b.label, x + w / 2, y + h - 34)
 
-  // occupancy indicator: little dot for its worker (from live data later)
+  // occupancy indicator: little dot for its worker — pulses with real status
+  // (green pulse when active, red when stuck, dim when idle)
   if (!b.isWarRoom) {
     const pal = WORKER_PALETTES[b.id]
+    const st = statusById[b.id]
     if (pal) {
-      ctx.fillStyle = pal.primary
+      const busy = st === 'active' || st === 'approval'
+      const stuck = st === 'stuck' || st === 'error'
+      const pulse = 0.5 + 0.5 * Math.sin(time * 0.01)
+      ctx.fillStyle = stuck ? '#ef4444' : busy ? pal.primary : 'rgba(255,255,255,0.35)'
+      ctx.globalAlpha = stuck ? 1 : busy ? 0.55 + 0.45 * pulse : 0.9
       ctx.beginPath()
-      ctx.arc(x + w / 2, y + h - 6, 3, 0, Math.PI * 2)
+      ctx.arc(x + w / 2, y + h - 6, busy ? 3.5 : 3, 0, Math.PI * 2)
       ctx.fill()
+      ctx.globalAlpha = 1
     }
   }
 }
@@ -414,6 +421,10 @@ export function PixelWorld({
   // live prop mirrors for use inside the rAF loop (which has [] deps)
   const missionRunningRef = useRef(missionRunning)
   missionRunningRef.current = missionRunning
+  // rising-edge detector: the first poll after a mission starts re-routes
+  // EVERY agent to the war room (even mid-walk); later polls only re-route
+  // agents that are at rest, so the town settles instead of churning.
+  const missionEdgeRef = useRef(false)
   const hoveredBuildingRef = useRef<string | null>(null)
 
   // camera helpers
@@ -472,6 +483,9 @@ export function PixelWorld({
     const entries = runtime.data ?? []
     const healthById = new Map((health.data ?? []).map((h) => [h.workerId, h]))
     const now = Date.now()
+    // mission rising edge: first poll after the mission flips on
+    const missionStarted = missionRunning && !missionEdgeRef.current
+    missionEdgeRef.current = missionRunning
 
     for (const entry of entries) {
       const ch = charsRef.current.find((c) => c.workerId === entry.workerId)
@@ -509,20 +523,29 @@ export function PixelWorld({
       // behavior: active workers walk to war room (meeting) or work at desk.
       // When a Conductor mission is running, everyone gathers at the war room.
       // Long trips follow the roads via waypoints.
+      // Churn guard: only re-route agents that are AT REST. Re-rolling every
+      // poll would yank mid-walk agents onto new targets forever and the town
+      // would never settle. The one exception is the mission rising edge,
+      // where every agent marches to the war room immediately.
+      const atRest = ch.mode === 'idle' || ch.mode === 'work' || ch.mode === 'meeting'
+      const nearPlaza = distTo(ch, WAR_ROOM_PLAZA.x, WAR_ROOM_PLAZA.y) < 260
       if (missionRunning) {
-        setDestination(ch, WAR_ROOM_PLAZA.x + (Math.random() * 200 - 100), WAR_ROOM_PLAZA.y + (Math.random() * 140 - 70))
-      } else if (status === 'active' || status === 'approval') {
-        if (Math.random() < 0.5) {
-          setDestination(ch, WAR_ROOM_PLAZA.x + (Math.random() * 200 - 100), WAR_ROOM_PLAZA.y + (Math.random() * 140 - 70))
-        } else if (distTo(ch, desk.x, desk.y) > 2) {
+        if (missionStarted || (atRest && !nearPlaza)) {
+          setDestination(ch, WAR_ROOM_PLAZA.x + (Math.random() * 220 - 110), WAR_ROOM_PLAZA.y + (Math.random() * 140 - 70))
+        }
+      } else if ((status === 'active' || status === 'approval') && atRest) {
+        const atDesk = distTo(ch, desk.x, desk.y) < 60
+        if (!nearPlaza && Math.random() < 0.5) {
+          setDestination(ch, WAR_ROOM_PLAZA.x + (Math.random() * 220 - 110), WAR_ROOM_PLAZA.y + (Math.random() * 140 - 70))
+        } else if (!atDesk) {
           setDestination(ch, desk.x, desk.y)
         } else {
           ch.route = null
           ch.mode = 'work'
         }
-      } else if (distTo(ch, desk.x, desk.y) > 2) {
+      } else if (atRest && distTo(ch, desk.x, desk.y) > 2) {
         setDestination(ch, desk.x, desk.y)
-      } else {
+      } else if (atRest) {
         ch.route = null
         ch.mode = ch.mode === 'walk' ? 'walk' : 'idle'
       }
@@ -623,7 +646,11 @@ export function PixelWorld({
               c.mode = c.stuck ? 'idle' : c.statusLabel === 'active' ? 'work' : 'idle'
             } else if (atPlaza) {
               c.mode = 'meeting'
-              c.bubble = c.bubbleUntil < now ? 'meeting in the war room' : c.bubble
+              // face the war room while gathered
+              c.faceDir = WAR_ROOM_PLAZA.x >= c.x ? 1 : -1
+              if (c.bubbleUntil < now) {
+                c.bubble = missionRunningRef.current ? 'mission sync — war room' : 'meeting in the war room'
+              }
               // drift around plaza while meeting
               if (Math.random() < 0.01) {
                 c.targetX = WAR_ROOM_PLAZA.x + (Math.random() * 220 - 110)
@@ -707,6 +734,22 @@ export function PixelWorld({
         ctx.fill()
       }
 
+      // drifting pixel clouds (day) — fade out as night falls
+      if (night < 0.75) {
+        const cloudAlpha = (1 - night) * 0.45
+        for (let i = 0; i < 3; i++) {
+          const cw2 = 48 + i * 16
+          const cx2 = ((t * (0.009 + i * 0.004) + i * 640 + 240) % (cw + cw2 * 2)) - cw2
+          const cy2 = GROUND_Y * cam.scale * (0.16 + i * 0.15)
+          ctx.fillStyle = `rgba(255,255,255,${cloudAlpha})`
+          ctx.beginPath()
+          ctx.arc(cx2, cy2, 10, 0, Math.PI * 2)
+          ctx.arc(cx2 + 13, cy2 - 4, 8, 0, Math.PI * 2)
+          ctx.arc(cx2 + 25, cy2, 9, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
+
       // ── ground ──
       const groundTop = mixColor('#2a3a28', '#101820', night)
       const groundBottom = mixColor('#1d2b22', '#0a1018', night)
@@ -733,6 +776,21 @@ export function PixelWorld({
       for (const bx of [180, 420, 1980, 2220]) {
         ctx.fillRect(bx - 22, GROUND_Y, 44, WORLD_H - GROUND_Y)
       }
+      // road center dashes — makes the town read as a real place
+      ctx.strokeStyle = 'rgba(255,255,255,0.13)'
+      ctx.lineWidth = 2
+      ctx.setLineDash([14, 18])
+      ctx.beginPath()
+      ctx.moveTo(0, GROUND_Y + 320)
+      ctx.lineTo(WORLD_W, GROUND_Y + 320)
+      ctx.moveTo(0, GROUND_Y + 340 + 250 + 20)
+      ctx.lineTo(WORLD_W, GROUND_Y + 340 + 250 + 20)
+      for (const bx of [180, 420, 1980, 2220]) {
+        ctx.moveTo(bx, GROUND_Y + 24)
+        ctx.lineTo(bx, WORLD_H - 24)
+      }
+      ctx.stroke()
+      ctx.setLineDash([])
       // plaza — ring shifts to emerald and pulses when a mission is live
       const mission = missionRunningRef.current
       ctx.fillStyle = mission ? 'rgba(16,185,129,0.12)' : 'rgba(99,102,241,0.10)'
@@ -777,8 +835,10 @@ export function PixelWorld({
       }
 
       // buildings
+      const statusById: Record<string, string> = {}
+      for (const c of chars) statusById[c.workerId] = c.statusLabel
       for (const b of BUILDINGS) {
-        drawBuilding(ctx, b, t, night, hoveredBuildingRef.current, mission)
+        drawBuilding(ctx, b, t, night, hoveredBuildingRef.current, mission, statusById)
       }
 
       // mission banner above the war room when a Conductor mission is live
@@ -953,19 +1013,40 @@ export function PixelWorld({
         return
       }
     }
+    // standalone (/world): fit the WHOLE town so offices, war room, plaza and
+    // the agents at their desks are all in frame
+    const rect = wrapRef.current?.getBoundingClientRect()
+    if (rect && rect.width > 0 && rect.height > 0) {
+      const scale = Math.max(0.25, Math.min(0.75, Math.min(rect.width / WORLD_W, rect.height / WORLD_H)))
+      cameraRef.current = { x: -(WORLD_W / 2) * scale, y: -(WORLD_H / 2) * scale, scale }
+      setZoom(scale)
+      return
+    }
     cameraRef.current = { x: 0, y: 0, scale: 0.55 }
     setZoom(0.55)
   }, [embedded])
 
-  // fit the camera to the Conductor's narrower embed on mount + resize:
-  // frame the war room, plaza and inner offices rather than the map's corner
+  // fit the camera on mount + resize:
+  // embedded → frame the war room, plaza and inner offices for the Conductor's
+  // narrow view; standalone (/world) → fit the whole town so desks + plaza are
+  // in frame (agents live at y 745–1325, which the old center-0.55 view hid)
   useEffect(() => {
-    if (!embedded) return
     const fit = () => {
       const rect = wrapRef.current?.getBoundingClientRect()
       if (!rect || rect.width === 0) return
-      const scale = Math.max(0.35, Math.min(0.9, Math.min(rect.width / 1100, rect.height / 500)))
-      cameraRef.current = { x: -1200 * scale, y: -650 * scale, scale }
+      let scale: number
+      let x: number
+      let y: number
+      if (embedded) {
+        scale = Math.max(0.35, Math.min(0.9, Math.min(rect.width / 1100, rect.height / 500)))
+        x = -1200 * scale
+        y = -650 * scale
+      } else {
+        scale = Math.max(0.25, Math.min(0.75, Math.min(rect.width / WORLD_W, rect.height / WORLD_H)))
+        x = -(WORLD_W / 2) * scale
+        y = -(WORLD_H / 2) * scale
+      }
+      cameraRef.current = { x, y, scale }
       setZoom(scale)
     }
     fit()
@@ -983,12 +1064,13 @@ export function PixelWorld({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#0a0e1a]">
-      {/* header */}
-      <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-3">
+      {/* header — glass bar, theme tokens with dark fallbacks so it matches
+          the Conductor's surface when embedded and stands alone on /world */}
+      <div className="flex items-center justify-between border-b border-[var(--theme-border,#ffffff14)] bg-[#0d1220]/55 px-5 py-3 backdrop-blur-xl">
         {!embedded ? (
           <div>
-            <h1 className="text-[16px] font-medium tracking-[-0.03em] text-[#f0f2f7]">Pixel World</h1>
-            <p className="text-[10.5px] text-[#5a6172]">the swarm town · live from /api/swarm-runtime · polled 10s</p>
+            <h1 className="text-[16px] font-medium tracking-[-0.03em] text-[var(--theme-text,#f0f2f7)]">Pixel World</h1>
+            <p className="text-[10.5px] text-[var(--theme-muted,#5a6172)]">the swarm town · live from /api/swarm-runtime · polled 10s</p>
           </div>
         ) : (
           <div className="flex items-center gap-2">
@@ -996,7 +1078,7 @@ export function PixelWorld({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-400 opacity-60" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-indigo-400" />
             </span>
-            <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#7d8597]">World</span>
+            <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--theme-muted,#7d8597)]">World</span>
             {missionRunning ? (
               <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 font-mono text-[9.5px] text-emerald-300">
                 mission running — agents in the war room
@@ -1010,20 +1092,20 @@ export function PixelWorld({
         )}
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.03] p-1">
-            <button onClick={() => zoomBy(1.25)} className="rounded-md px-2 py-1 text-[12px] text-[#b6bdcb] hover:bg-white/[0.06]" title="zoom in">+</button>
-            <button onClick={() => zoomBy(0.8)} className="rounded-md px-2 py-1 text-[12px] text-[#b6bdcb] hover:bg-white/[0.06]" title="zoom out">−</button>
-            <button onClick={resetCamera} className="rounded-md px-2 py-1 text-[10px] text-[#b6bdcb] hover:bg-white/[0.06]" title="reset view">⌂</button>
+            <button onClick={() => zoomBy(1.25)} className="rounded-md px-2 py-1 text-[12px] text-[var(--theme-muted,#b6bdcb)] hover:bg-white/[0.06]" title="zoom in">+</button>
+            <button onClick={() => zoomBy(0.8)} className="rounded-md px-2 py-1 text-[12px] text-[var(--theme-muted,#b6bdcb)] hover:bg-white/[0.06]" title="zoom out">−</button>
+            <button onClick={resetCamera} className="rounded-md px-2 py-1 text-[10px] text-[var(--theme-muted,#b6bdcb)] hover:bg-white/[0.06]" title="reset view">⌂</button>
           </div>
           <button
             onClick={() => setPaused((p) => !p)}
-            className={`rounded-lg border px-3 py-1.5 text-[11px] font-medium ${paused ? 'border-amber-400/30 bg-amber-400/10 text-amber-300' : 'border-white/[0.08] bg-white/[0.03] text-[#b6bdcb] hover:bg-white/[0.06]'}`}
+            className={`rounded-lg border px-3 py-1.5 text-[11px] font-medium ${paused ? 'border-amber-400/30 bg-amber-400/10 text-amber-300' : 'border-white/[0.08] bg-white/[0.03] text-[var(--theme-muted,#b6bdcb)] hover:bg-white/[0.06]'}`}
           >
             {paused ? '⏸ paused' : '▶ live'}
           </button>
           {!embedded ? (
             <Link
               to="/conductor"
-              className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[11px] font-medium text-[#b6bdcb] hover:bg-white/[0.06]"
+              className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[11px] font-medium text-[var(--theme-muted,#b6bdcb)] hover:bg-white/[0.06]"
             >
               ← Conductor
             </Link>

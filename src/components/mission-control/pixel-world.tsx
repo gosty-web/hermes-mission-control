@@ -133,6 +133,8 @@ type CharState = {
   activeTool: string | null
   statusLabel: string
   errorMsg: string | null
+  // next timestamp when an idle agent may take a short patrol stroll
+  patrolAt: number
 }
 
 // Send a character somewhere. For long trips they follow the roads via
@@ -198,6 +200,28 @@ function drawCharacter(ctx: Ctx, c: CharState, time: number) {
 
   const cx = c.x
   const cy = y
+
+  // activity halo — a soft ground glow so busy/stuck agents are legible at a
+  // glance across the town (Monitor surface: hierarchy over decoration).
+  // Faint for busy, steady red for stuck, nothing for idle so the map reads calm.
+  if (c.stuck) {
+    const g = ctx.createRadialGradient(cx, c.y + 9, 1, cx, c.y + 9, 20)
+    g.addColorStop(0, 'rgba(239,68,68,0.32)')
+    g.addColorStop(1, 'rgba(239,68,68,0)')
+    ctx.fillStyle = g
+    ctx.beginPath()
+    ctx.arc(cx, c.y + 9, 20, 0, Math.PI * 2)
+    ctx.fill()
+  } else if (c.mode === 'work' || c.statusLabel === 'active') {
+    const pulse = 0.22 + 0.10 * Math.sin(time * 0.008)
+    const g = ctx.createRadialGradient(cx, c.y + 9, 1, cx, c.y + 9, 18)
+    g.addColorStop(0, hexToRgba(pal.primary, pulse))
+    g.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = g
+    ctx.beginPath()
+    ctx.arc(cx, c.y + 9, 18, 0, Math.PI * 2)
+    ctx.fill()
+  }
 
   // shadow
   ctx.fillStyle = 'rgba(0,0,0,0.25)'
@@ -546,6 +570,8 @@ export function PixelWorld({
         activeTool: null,
         statusLabel: 'idle',
         errorMsg: null,
+        // first idle patrol comes soon after the boot standup settles
+        patrolAt: 9000 + Math.random() * 12000,
       }
     })
     // everyone gathers at the plaza once at boot — a "standup"
@@ -758,6 +784,25 @@ export function PixelWorld({
         // expire bubbles
         if (c.bubbleUntil < now && !c.stuck) {
           c.bubble = c.statusLabel === 'active' ? 'working' : 'standing by'
+        }
+
+        // idle patrol — after resting at their desk for a while, agents take a
+        // short stroll in front of the office so the town never freezes into a
+        // static grid between 10s polls. On the road they read as alive; back
+        // at the desk the patrol timer starts over. Only when calm (no mission,
+        // not stuck) so behavior and mission-gathers stay authoritative.
+        if (!missionRunningRef.current && !c.stuck && c.mode === 'idle' && c.route === null) {
+          const desk = DESK_BY_WORKER[c.workerId]
+          if (desk) {
+            if (now > c.patrolAt && distTo(c, desk.x, desk.y) < 120) {
+              setDestination(c, desk.x + (Math.random() * 140 - 30), desk.y + (Math.random() * 42 + 6))
+              c.patrolAt = now + 18000 + Math.random() * 15000
+            } else if (now - c.patrolAt > 45000) {
+              // long-quiet baseline: nudge the timer so a patrol never missed
+              // by a poll keeps stretching activity
+              c.patrolAt = now + 8000 + Math.random() * 18000
+            }
+          }
         }
 
         // character-attached particles: dust puffs while walking, colored
@@ -1491,6 +1536,11 @@ function mixColor(a: string, b: string, t: number): string {
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const n = parseInt(hex.replace('#', ''), 16)
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+}
+
+function hexToRgba(hex: string, a: number): string {
+  const { r, g, b } = hexToRgb(hex)
+  return `rgba(${r},${g},${b},${a})`
 }
 
 // ── easing / text helpers ───────────────────────────────────────────────────

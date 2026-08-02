@@ -282,7 +282,13 @@ export const Route = createFileRoute('/api/files')({
             url.searchParams.get('maxEntries'),
           )
 
-          const workspaceRoot = await getWorkspaceRoot()
+          const workspaceRoot = await getWorkspaceRoot().catch(() => null)
+          if (!workspaceRoot) {
+            // No valid workspace selected (e.g. headless box with no catalog):
+            // degrade to a clean empty tree instead of a 500 that spams the
+            // console and shows an error state for the file explorer.
+            return json({ root: '', base: '', entries: [] })
+          }
 
           if (action === 'list' && hasGlob(inputPath)) {
             const globListing = await readGlobDirectory(

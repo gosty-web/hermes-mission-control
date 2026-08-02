@@ -464,7 +464,12 @@ function drawOfficeInterior(ctx: Ctx, b: BuildingDef, c: CharState | null, time:
   const { x, y, w, h } = b
   const pal = WORKER_PALETTES[b.id] ?? WORKER_PALETTES.orchestrator
   const busy = c ? c.statusLabel === 'active' || c.mode === 'work' : false
-  const present = c ? c.mode !== 'walk' : false
+  // occupancy is LOCATION-based: the office shows a seated figure only when the
+  // worker is actually home (at/around their desk) — idle at the plaza or out
+  // walking leaves an empty chair, so the town reads truthfully.
+  const deskSpot = DESK_BY_WORKER[b.id] ?? { x: x + w / 2, y: y + h + 30 }
+  const atOffice = c ? distTo(c, deskSpot.x, deskSpot.y) < 130 : false
+  const present = c ? c.mode === 'work' || (c.mode !== 'walk' && atOffice) : false
 
   const ix = x + 12
   const iw = w - 24
@@ -490,8 +495,43 @@ function drawOfficeInterior(ctx: Ctx, b: BuildingDef, c: CharState | null, time:
   ctx.roundRect(ix, iy, iw, ih, 6)
   ctx.fill()
 
-  // desk along the front edge of the diorama
   const deskY = iBot - 26
+  // seated worker at the desk (vision #3): a chair in the middle of the room
+  // whose occupant sits BEHIND the work surface — drawn BEFORE the desk so the
+  // surface + laptop render in front and the worker reads as sat AT the desk.
+  // (Previously the chairperson was anchored to the top of the room, far from
+  // the desk, so no one ever looked like they were at the workstation.)
+  const chairX = ix + iw / 2
+  ctx.fillStyle = '#2a3446'
+  ctx.beginPath()
+  ctx.roundRect(chairX - 7, deskY - 26, 14, 30, 3) // backrest
+  ctx.fill()
+  ctx.fillStyle = '#202938'
+  ctx.fillRect(chairX - 8, deskY - 10, 16, 5) // seat
+  // the worker themselves — only when they're home (idle/work/meeting); an
+  // empty chair while they're out walking so offices read as truly occupied.
+  if (present) {
+    const skinT = c?.stuck ? '#fca5a5' : '#f2c9a0'
+    const lean = busy ? Math.sin(time * 0.05) * 1 : 0
+    ctx.fillStyle = sessionColor(pal, c?.stuck) // torso
+    ctx.fillRect(chairX - 5, deskY - 24 + lean, 10, 8)
+    ctx.fillStyle = skinT
+    ctx.fillRect(chairX - 4, deskY - 34, 8, 8) // head
+    ctx.fillStyle = '#0e1420'
+    ctx.fillRect(chairX + 1, deskY - 31, 2, 2) // eye → the laptop
+    // arms reaching down to the keyboard — a tiny alternating bob types when busy
+    ctx.fillStyle = pal.dark
+    if (busy) {
+      const alt = Math.sin(time * 0.15) > 0
+      ctx.fillRect(chairX - 7, deskY - 13, 3, 8 + (alt ? 0 : 3))
+      ctx.fillRect(chairX + 4, deskY - 13, 3, 8 + (alt ? 3 : 0))
+    } else {
+      ctx.fillRect(chairX - 7, deskY - 15, 3, 7)
+      ctx.fillRect(chairX + 4, deskY - 15, 3, 7)
+    }
+  }
+
+  // desk along the front edge of the diorama
   ctx.fillStyle = '#5b4020'
   ctx.fillRect(ix + 16, deskY, iw - 32, 8) // desk surface
   ctx.fillStyle = '#4a331a'
@@ -521,33 +561,19 @@ function drawOfficeInterior(ctx: Ctx, b: BuildingDef, c: CharState | null, time:
   ctx.fillRect(ix + 29, deskY - 9, 2, 2)
   if (busy && Math.sin(time * 0.05) > 0.6) px(ctx, ix + 31, deskY - 14, 1, 3, 'rgba(240,240,245,0.5)')
 
-  // chair — occupied by a seated worker when they're home
-  const chairX = ix + iw / 2
-  ctx.fillStyle = '#2a3446'
- ctx.beginPath()
-  ctx.roundRect(chairX - 7, iy + 34, 14, 22, 4) // backrest
-  ctx.fill()
-  ctx.fillStyle = '#202938'
-  ctx.fillRect(chairX - 8, iy + 46, 16, 5) // seat
-  ctx.fillStyle = sessionColor(pal, c?.stuck)
-  ctx.fillRect(chairX - 4, iy + 26, 8, 8) // head
-  ctx.fillRect(chairX - 5, iy + 34, 10, 6) // torso
-  ctx.fillStyle = pal.dark
-  ctx.fillRect(chairX - 5, iy + 50, 10, 3) // legs
-
-  // shelf + a couple of colored spines (adds "lived-in" clutter)
-  const shx = iw - 34
-  ctx.fillStyle = 'rgba(0,0,0,0.28)'
-  ctx.fillRect(ix + shx, iy + 20, 22, 4,)
-  const spineColors = ['#c94f7c', '#e8c14d', '#4d9fe8', '#56c58a']
-  spineColors.forEach((sc, i) => {
-    px(ctx, ix + shx + 3 + i * 4, iy + 24, 3, 6, sc)
-  })
-
   // plant in the corner (a bit of life)
   px(ctx, ix + 20, iBot - 14, 10, 4, '#7a5c34') // pot
   px(ctx, ix + 20, iBot - 20, 6, 8, '#2e7d4f') // leaves
   px(ctx, ix + 15, iBot - 16, 3, 3, '#3f9a61')
+
+  // shelf + a couple of colored spines (adds "lived-in" clutter)
+  const shx = iw - 34
+  ctx.fillStyle = 'rgba(0,0,0,0.28)'
+  ctx.fillRect(ix + shx, iy + 20, 22, 4)
+  const spineColors = ['#c94f7c', '#e8c14d', '#4d9fe8', '#56c58a']
+  spineColors.forEach((sc, i) => {
+    px(ctx, ix + shx + 3 + i * 4, iy + 24, 3, 6, sc)
+  })
 
   // planner sticky-note pinned to the wall (vision #4) — most items get ticked
   // off during a mission so the office reads as "work is underway".

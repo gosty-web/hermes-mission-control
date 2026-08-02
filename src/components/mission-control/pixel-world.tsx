@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import { Link } from '@tanstack/react-router'
+import type {WorkerRuntime} from '@/hooks/use-mission-data';
 import {
-  computeWorkerStatus,
-  timeAgo,
   WORKER_INITIALS,
   WORKER_PALETTES,
+  
+  computeWorkerStatus,
+  timeAgo,
   useSwarmHealth,
-  useSwarmRuntime,
-  type WorkerRuntime,
+  useSwarmRuntime
 } from '@/hooks/use-mission-data'
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -37,45 +38,35 @@ type BuildingDef = {
 }
 
 const BUILDINGS: Array<BuildingDef> = [
-  // WAR ROOM — center, big
+  // WAR ROOM — center, big mission command
   {
     id: 'war-room',
     label: 'WAR ROOM',
-    x: 1000,
-    y: 480,
-    w: 400,
-    h: 260,
+    x: 1020,
+    y: 470,
+    w: 360,
+    h: 240,
     color: '#1c2333',
     roof: '#6366f1',
     isWarRoom: true,
   },
-  // Left offices (5)
-  { id: 'builder', label: 'BUILDER', x: 90, y: 500, w: 180, h: 220, color: '#0f2430', roof: '#10b981' },
-  { id: 'reviewer', label: 'REVIEWER', x: 90, y: 790, w: 180, h: 220, color: '#241d0e', roof: '#f59e0b' },
-  { id: 'qa', label: 'QA', x: 90, y: 1080, w: 180, h: 220, color: '#0e2228', roof: '#06b6d4' },
-  { id: 'researcher', label: 'RESEARCH', x: 330, y: 1080, w: 180, h: 220, color: '#1c1430', roof: '#8b5cf6' },
-  { id: 'ops-watch', label: 'OPS-WATCH', x: 330, y: 790, w: 180, h: 220, color: '#2a1010', roof: '#ef4444' },
-  // Right offices (5)
-  { id: 'maintainer', label: 'MAINTAIN', x: 2130, y: 500, w: 180, h: 220, color: '#0e1a2e', roof: '#3b82f6' },
-  { id: 'strategist', label: 'STRATEGY', x: 2130, y: 790, w: 180, h: 220, color: '#2a0f22', roof: '#ec4899' },
-  { id: 'km-agent', label: 'KM-AGENT', x: 2130, y: 1080, w: 180, h: 220, color: '#0e2624', roof: '#14b8a6' },
-  { id: 'inbox-triage', label: 'INBOX', x: 1890, y: 1080, w: 180, h: 220, color: '#261708', roof: '#f97316' },
-  { id: 'orchestrator', label: 'ORCHESTRATOR', x: 1890, y: 500, w: 180, h: 220, color: '#141a2e', roof: '#818cf8' },
+  // The three live worker offices (roster = orchestrator, builder, researcher).
+  // Each gets a characterful interior diorama (drawOfficeInterior): wall theme
+  // tint, desk + laptop, chair, plant, shelf, rug, mug and a worker id nameplate.
+  { id: 'builder', label: 'BUILDER', x: 520, y: 470, w: 240, h: 250, color: '#0f2430', roof: '#10b981' },
+  { id: 'orchestrator', label: 'ORCHESTRATOR', x: 1600, y: 470, w: 240, h: 250, color: '#141a2e', roof: '#818cf8' },
+  { id: 'researcher', label: 'RESEARCH', x: 300, y: 900, w: 240, h: 250, color: '#1c1430', roof: '#8b5cf6' },
 ]
 
 // desk = where the worker idles/works (in front of their office door)
 const DESK_BY_WORKER: Record<string, { x: number; y: number }> = {
-  builder: { x: 180, y: 745 },
-  reviewer: { x: 180, y: 1035 },
-  qa: { x: 180, y: 1325 },
-  researcher: { x: 420, y: 1325 },
-  'ops-watch': { x: 420, y: 1035 },
-  maintainer: { x: 2220, y: 745 },
-  strategist: { x: 2220, y: 1035 },
-  'km-agent': { x: 2220, y: 1325 },
-  'inbox-triage': { x: 1980, y: 1325 },
-  orchestrator: { x: 1980, y: 745 },
+  builder: { x: 640, y: 734 },
+  orchestrator: { x: 1720, y: 734 },
+  researcher: { x: 420, y: 1154 },
 }
+
+// vertical roads / alleys that do NOT run through an office footprint
+const ALLEY_X: Array<number> = [250, 1450]
 
 // war-room plaza: where agents gather for meetings
 const WAR_ROOM_PLAZA = { x: 1200, y: 800 }
@@ -169,18 +160,32 @@ function setDestination(c: CharState, x: number, y: number) {
   c.mode = 'walk'
 }
 
-const WORKER_IDS = [
-  'orchestrator',
-  'builder',
-  'reviewer',
-  'qa',
-  'researcher',
-  'ops-watch',
-  'maintainer',
-  'strategist',
-  'km-agent',
-  'inbox-triage',
-]
+// Locked roster — exactly the three live workers from swarm.yaml.
+const WORKER_IDS = ['orchestrator', 'builder', 'researcher']
+
+// ── Planner / sticky-pad checklists — each worker's self-set tasks (vision #4).
+// Rendered as a yellow sticky pad on the office wall and as a readable planner
+// in the worker detail panel. items beyond `doneCount` read as pending; when a
+// Conductor mission is live most become checked-off to convey "work is underway".
+const WORKER_CHECKLISTS: Record<string, { title: string; items: Array<string> }> = {
+  orchestrator: {
+    title: 'ops · plan',
+    items: ['Split mission cards', 'Dispatch builder + researcher', 'Greenlight review gates', 'War-room sync', 'Debrief & hand off'],
+  },
+  builder: {
+    title: 'ship · build',
+    items: ['Read spec + diff', 'Diorama + pixel world', 'TDD on the build gate', 'Screenshot verification', 'Push commit'],
+  },
+  researcher: {
+    title: 'recon · notes',
+    items: ['Scan sources / feeds', 'Draft findings', 'Cross-check the refs', 'Wire the visuals', 'Share briefing'],
+  },
+}
+
+const DEFAULT_CHECKLIST: { title: string; items: Array<string> } = {
+  title: 'planner',
+  items: ['Pick up tasks', 'Run the flow', 'Verify the work'],
+}
 
 // ── Pixel sprite drawing (fillRect only) ────────────────────────────────────
 
@@ -437,18 +442,155 @@ function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number, hov
   if (!b.isWarRoom) {
     const pal = WORKER_PALETTES[b.id]
     const st = statusById[b.id]
-    if (pal) {
-      const busy = st === 'active' || st === 'approval'
-      const stuck = st === 'stuck' || st === 'error'
-      const pulse = 0.5 + 0.5 * Math.sin(time * 0.01)
-      ctx.fillStyle = stuck ? '#ef4444' : busy ? pal.primary : 'rgba(255,255,255,0.35)'
-      ctx.globalAlpha = stuck ? 1 : busy ? 0.55 + 0.45 * pulse : 0.9
-      ctx.beginPath()
-      ctx.arc(x + w / 2, y + h - 6, busy ? 3.5 : 3, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
+    const busy = st === 'active' || st === 'approval'
+    const stuck = st === 'stuck' || st === 'error'
+    const pulse = 0.5 + 0.5 * Math.sin(time * 0.01)
+    ctx.fillStyle = stuck ? '#ef4444' : busy ? pal.primary : 'rgba(255,255,255,0.35)'
+    ctx.globalAlpha = stuck ? 1 : busy ? 0.55 + 0.45 * pulse : 0.9
+    ctx.beginPath()
+    ctx.arc(x + w / 2, y + h - 6, busy ? 3.5 : 3, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.globalAlpha = 1
   }
+}
+
+// ── Office interior diorama ────────────────────────────────────────────────
+// Draws a readable front "stage" showing each worker's office as a living room:
+// theme-tinted walls, a desk + laptop (screen reacts to status/night), a chair
+// that is occupied when the worker is home, a mug, a plant, a shelf, a rug,
+// and a door-side nameplate with their worker id. When a mission is running the
+// planner sticky pad on the wall ticks most items to signal "work is underway".
+function drawOfficeInterior(ctx: Ctx, b: BuildingDef, c: CharState | null, time: number, night: number, mission: boolean) {
+  const { x, y, w, h } = b
+  const pal = WORKER_PALETTES[b.id] ?? WORKER_PALETTES.orchestrator
+  const busy = c ? c.statusLabel === 'active' || c.mode === 'work' : false
+  const present = c ? c.mode !== 'walk' : false
+
+  const ix = x + 12
+  const iw = w - 24
+  const iy = y + 16
+  const ih = h - 52 // leave room for door + nameplate below
+  const iBot = iy + ih
+
+  // interior cast shadows (soft, on-brand depth
+  ctx.fillStyle = 'rgba(0,0,0,0.30)'
+  ctx.beginPath()
+  ctx.roundRect(ix - 4, iy - 4, iw + 8, ih + 12, 8)
+  ctx.fill()
+
+  // back wall — worker-tinted so each office reads as its own character
+  // (builder teal / orchestrator indigo / researcher violet)
+  const wallTop = mixColor(pal.dark, '#1b2333', 0.55)
+  const wallBot = mixColor(b.color, '#0c111f', night)
+  const wall = ctx.createLinearGradient(ix, iy, ix, iBot)
+  wall.addColorStop(0, wallTop)
+  wall.addColorStop(1, wallBot)
+  ctx.fillStyle = wall
+  ctx.beginPath()
+  ctx.roundRect(ix, iy, iw, ih, 6)
+  ctx.fill()
+
+  // desk along the front edge of the diorama
+  const deskY = iBot - 26
+  ctx.fillStyle = '#5b4020'
+  ctx.fillRect(ix + 16, deskY, iw - 32, 8) // desk surface
+  ctx.fillStyle = '#4a331a'
+  ctx.fillRect(ix + 16, deskY + 8, iw - 32, 5) // drawer
+
+  // laptop on the desk — screen glows when the worker is active / at night
+  const lx = ix + iw / 2 - 16
+  // soft halo behind the screen so busy workers "lite up" at a glance
+  const washA = (0.18 + 0.1 * Math.sin(time * 0.03)) * (busy || night > 0.35 ? 1 : 0.4)
+  ctx.fillStyle = hexToRgba(pal.glow, washA)
+  ctx.fillRect(lx - 2, deskY - 14, 36, 16)
+  ctx.fillStyle = `${pal.light}`
+  ctx.globalAlpha = busy ? 0.92 + 0.08 * Math.sin(time * 0.05) : present ? 0.55 : 0.3
+  ctx.fillRect(lx, deskY - 12, 32, 12) // screen
+  ctx.fillStyle = `${pal.dark}`
+  ctx.fillRect(lx + 1, deskY - 11, 30, 10)
+  ctx.globalAlpha = 1
+  // cursor blink when working
+  if (busy && Math.sin(time * 0.08) > 0) px(ctx, lx + 4, deskY - 8, 1, 5, pal.light)
+  ctx.fillStyle = '#c9b88a'
+  ctx.fillRect(ix + iw / 2 + 16, deskY - 6, 26, 4) // keyboard
+
+  // mug next to the laptop (steam when hard at work)
+  ctx.fillStyle = present ? pal.primary : '#9aa4b5'
+  ctx.fillRect(ix + 30, deskY - 8, 6, 8)
+  ctx.fillStyle = '#d7dee9'
+  ctx.fillRect(ix + 29, deskY - 9, 2, 2)
+  if (busy && Math.sin(time * 0.05) > 0.6) px(ctx, ix + 31, deskY - 14, 1, 3, 'rgba(240,240,245,0.5)')
+
+  // chair — occupied by a seated worker when they're home
+  const chairX = ix + iw / 2
+  ctx.fillStyle = '#2a3446'
+ ctx.beginPath()
+  ctx.roundRect(chairX - 7, iy + 34, 14, 22, 4) // backrest
+  ctx.fill()
+  ctx.fillStyle = '#202938'
+  ctx.fillRect(chairX - 8, iy + 46, 16, 5) // seat
+  ctx.fillStyle = sessionColor(pal, c?.stuck)
+  ctx.fillRect(chairX - 4, iy + 26, 8, 8) // head
+  ctx.fillRect(chairX - 5, iy + 34, 10, 6) // torso
+  ctx.fillStyle = pal.dark
+  ctx.fillRect(chairX - 5, iy + 50, 10, 3) // legs
+
+  // shelf + a couple of colored spines (adds "lived-in" clutter)
+  const shx = iw - 34
+  ctx.fillStyle = 'rgba(0,0,0,0.28)'
+  ctx.fillRect(ix + shx, iy + 20, 22, 4,)
+  const spineColors = ['#c94f7c', '#e8c14d', '#4d9fe8', '#56c58a']
+  spineColors.forEach((sc, i) => {
+    px(ctx, ix + shx + 3 + i * 4, iy + 24, 3, 6, sc)
+  })
+
+  // plant in the corner (a bit of life)
+  px(ctx, ix + 20, iBot - 14, 10, 4, '#7a5c34') // pot
+  px(ctx, ix + 20, iBot - 20, 6, 8, '#2e7d4f') // leaves
+  px(ctx, ix + 15, iBot - 16, 3, 3, '#3f9a61')
+
+  // planner sticky-note pinned to the wall (vision #4) — most items get ticked
+  // off during a mission so the office reads as "work is underway".
+  const stickerX = ix + 10
+  const stickerY = iy + 20
+  ctx.fillStyle = 'rgba(250,204,21,0.82)'
+  ctx.fillRect(stickerX, stickerY, 20, 30)
+  ctx.fillStyle = 'rgba(120,80,10,0.45)'
+  for (let li = 0; li < 3; li++) ctx.fillRect(stickerX + 3, stickerY + 7 + li * 6, 14, 1)
+  if (mission) {
+    ctx.fillStyle = '#15803d'
+    for (let li = 0; li < 2; li++) ctx.fillRect(stickerX + 3, stickerY + 6 + li * 7, 5, 4)
+  }
+
+  // rug on the floor
+  ctx.fillStyle = 'rgba(255,255,255,0.06)'
+  ctx.beginPath()
+  ctx.roundRect(ix + 14, iBot - 8, iw - 28, 5, 2)
+  ctx.fill()
+
+  // warm interior light + window glow at night
+  if (night > 0.2) {
+    const lamp = ctx.createRadialGradient(ix + iw / 2, iy + 18, 2, ix + iw / 2, iy + 18, 44)
+    lamp.addColorStop(0, `rgba(255,214,150,${0.4 * night})`)
+    lamp.addColorStop(1, 'rgba(255,214,150,0)')
+    ctx.fillStyle = lamp
+    ctx.beginPath()
+    ctx.roundRect(ix, iy, iw, ih, 6)
+    ctx.fill()
+  }
+
+  // worker-id nameplate (door-side)
+  ctx.font = '700 8px "JetBrains Mono", monospace'
+  ctx.textAlign = 'center'
+  ctx.fillStyle = '#0a0e1a'
+  ctx.fillRect(ix + iw - 44, iBot + 8, 44, 12) // plate
+  ctx.fillStyle = pal.light
+  ctx.fillText(b.id, ix + iw - 22, iBot + 17)
+}
+
+// tiny helper: session seat / head color respects a stuck worker
+function sessionColor(pal: { primary: string; light: string; dark: string; glow: string }, stuck: boolean | undefined): string {
+  return stuck ? '#fca5a5' : pal.primary
 }
 
 // street lamps: dark poles by day, warm halos + ground light pools at night
@@ -578,10 +720,8 @@ export function PixelWorld({
     charsRef.current.forEach((c, i) => {
       setTimeout(() => {
         const ch = charsRef.current[i]
-        if (ch) {
-          setDestination(ch, WAR_ROOM_PLAZA.x + (Math.random() * 160 - 80), WAR_ROOM_PLAZA.y + (Math.random() * 120 - 60))
-          ch.bubble = 'standup — reporting in'
-        }
+        setDestination(ch, WAR_ROOM_PLAZA.x + (Math.random() * 160 - 80), WAR_ROOM_PLAZA.y + (Math.random() * 120 - 60))
+        ch.bubble = 'standup — reporting in'
       }, 300 + i * 140)
     })
   }, [])
@@ -599,7 +739,7 @@ export function PixelWorld({
       const ch = charsRef.current.find((c) => c.workerId === entry.workerId)
       if (!ch) continue
       const h = healthById.get(entry.workerId) ?? null
-      const { status, statusLabel } = computeWorkerStatus(entry as WorkerRuntime, h)
+      const { status, statusLabel } = computeWorkerStatus(entry, h)
       const desk = DESK_BY_WORKER[entry.workerId] ?? { x: 1200, y: 800 }
       const hasError = Boolean(h && (h.recentAuthErrors > 0 || h.recentFallbacks > 0))
       const errMsg = h?.lastErrorMessage ?? h?.lastFallbackMessage ?? null
@@ -753,7 +893,7 @@ export function PixelWorld({
             c.y = c.targetY
             // arrived: decide what to do at destination
             const nearDesk = DESK_BY_WORKER[c.workerId]
-            const atDesk = nearDesk && Math.hypot(c.x - nearDesk.x, c.y - nearDesk.y) < 40
+            const atDesk = Math.hypot(c.x - nearDesk.x, c.y - nearDesk.y) < 40
             const atPlaza = Math.hypot(c.x - WAR_ROOM_PLAZA.x, c.y - WAR_ROOM_PLAZA.y) < 200
             if (atDesk) {
               c.mode = c.stuck ? 'idle' : c.statusLabel === 'active' ? 'work' : 'idle'
@@ -950,9 +1090,9 @@ export function PixelWorld({
       ctx.fillStyle = 'rgba(0,0,0,0.22)'
       ctx.fillRect(0, GROUND_Y + 300, WORLD_W, 40) // main road
       ctx.fillRect(0, GROUND_Y + 300 + 40 + 250, WORLD_W, 40)
-      // vertical roads
-      for (const bx of [180, 420, 1980, 2220]) {
-        ctx.fillRect(bx - 22, GROUND_Y, 44, WORLD_H - GROUND_Y)
+      // vertical roads / alleys (kept clear of every office footprint)
+      for (const bx of ALLEY_X) {
+        ctx.fillRect(bx - 20, GROUND_Y, 40, WORLD_H - GROUND_Y)
       }
       // road center dashes — makes the town read as a real place
       ctx.strokeStyle = 'rgba(255,255,255,0.13)'
@@ -963,7 +1103,7 @@ export function PixelWorld({
       ctx.lineTo(WORLD_W, GROUND_Y + 320)
       ctx.moveTo(0, GROUND_Y + 340 + 250 + 20)
       ctx.lineTo(WORLD_W, GROUND_Y + 340 + 250 + 20)
-      for (const bx of [180, 420, 1980, 2220]) {
+      for (const bx of ALLEY_X) {
         ctx.moveTo(bx, GROUND_Y + 24)
         ctx.lineTo(bx, WORLD_H - 24)
       }
@@ -1020,6 +1160,11 @@ export function PixelWorld({
       for (const c of chars) statusById[c.workerId] = c.statusLabel
       for (const b of BUILDINGS) {
         drawBuilding(ctx, b, t, night, hoveredBuildingRef.current, mission, statusById)
+        // the three live offices get the living-room diorama (vision #1/#5)
+        if (!b.isWarRoom) {
+          const owner = chars.find((c) => c.workerId === b.id) ?? null
+          drawOfficeInterior(ctx, b, owner, t, night, mission)
+        }
       }
 
       // mission banner above the war room when a Conductor mission is live
@@ -1360,7 +1505,7 @@ export function PixelWorld({
               }}
             >
               <div className="flex items-center gap-2">
-                <span className="h-1.5 w-1.5 rounded-full" style={{ background: WORKER_PALETTES[hovered.workerId]?.primary }} />
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: WORKER_PALETTES[hovered.workerId].primary }} />
                 <span className="text-[11.5px] font-medium text-[#f0f2f7]">{hovered.workerId}</span>
                 <span className="ml-auto rounded px-1.5 py-px font-mono text-[9px] text-[#7d8597]">{hovered.statusLabel}</span>
               </div>
@@ -1425,9 +1570,9 @@ export function PixelWorld({
                   <div
                     className="flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-bold"
                     style={{
-                      background: WORKER_PALETTES[selected.workerId]?.primary + '22',
-                      boxShadow: `inset 0 0 0 1px ${WORKER_PALETTES[selected.workerId]?.primary}66`,
-                      color: WORKER_PALETTES[selected.workerId]?.primary,
+                      background: WORKER_PALETTES[selected.workerId].primary + '22',
+                      boxShadow: `inset 0 0 0 1px ${WORKER_PALETTES[selected.workerId].primary}66`,
+                      color: WORKER_PALETTES[selected.workerId].primary,
                     }}
                   >
                     {WORKER_INITIALS[selected.workerId]}
@@ -1461,6 +1606,43 @@ export function PixelWorld({
                 )}
               </div>
 
+              {/* planner / sticky-pad checklist (vision #4) */}
+              {(() => {
+                const pad = WORKER_CHECKLISTS[selected.workerId] ?? DEFAULT_CHECKLIST
+                const done = missionRunning ? Math.max(0, pad.items.length - 1) : Math.min(2, pad.items.length)
+                return (
+                  <div className="mt-3 rounded-xl border border-amber-200/20 bg-amber-100/[0.06] p-2.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[12px] leading-none">🗒</span>
+                      <span className="font-mono text-[9px] uppercase tracking-wider text-amber-200/80">
+                        {pad.title} · {done}/{pad.items.length} done
+                      </span>
+                    </div>
+                    <ul className="mt-1.5 space-y-0.5">
+                      {pad.items.map((it, i) => {
+                        const checked = i < done
+                        return (
+                          <li key={it} className="flex items-start gap-1.5 text-[9.5px] leading-snug">
+                            <span
+                              className={
+                                checked
+                                  ? 'mt-px flex h-3 w-3 shrink-0 items-center justify-center rounded-sm border border-emerald-400/50 bg-emerald-400/20 text-[7.5px] text-emerald-300'
+                                  : 'mt-px flex h-3 w-3 shrink-0 items-center justify-center rounded-sm border border-white/15 text-transparent'
+                              }
+                            >
+                              ✓
+                            </span>
+                            <span className={checked ? 'text-emerald-100/90 line-through decoration-emerald-400/50' : 'text-amber-100/70'}>
+                              {it}
+                            </span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                )
+              })()}
+
               <div className="mt-3 space-y-2 text-[10.5px] leading-snug">
                 <div>
                   <div className="text-[9px] font-semibold uppercase tracking-wider text-[#5a6172]">Current task</div>
@@ -1480,11 +1662,11 @@ export function PixelWorld({
                     <div className="mt-0.5 text-[10px] text-red-200/90">{selected.errorMsg}</div>
                   </div>
                 )}
-                {selectedWorker.h && (selectedWorker.h.skills?.length ?? 0) > 0 && (
+                {selectedWorker.h && selectedWorker.h.skills.length > 0 && (
                   <div>
                     <div className="text-[9px] font-semibold uppercase tracking-wider text-[#5a6172]">Skills</div>
                     <div className="mt-1 flex flex-wrap gap-1">
-                      {(selectedWorker.h.skills ?? []).slice(0, 5).map((s: string) => (
+                      {selectedWorker.h.skills.slice(0, 5).map((s: string) => (
                         <span key={s} className="rounded border border-white/[0.07] px-1.5 py-px text-[9px] text-[#7d8597]">
                           {s}
                         </span>
@@ -1555,10 +1737,10 @@ function easeOutBack(t: number): number {
 }
 
 // word-wrap bubble text to at most 3 lines; the last line gets an ellipsis
-function wrapBubbleText(ctx: Ctx, text: string, maxW: number): string[] {
+function wrapBubbleText(ctx: Ctx, text: string, maxW: number): Array<string> {
   ctx.font = '9px "JetBrains Mono", monospace'
   const words = text.split(/\s+/)
-  const lines: string[] = []
+  const lines: Array<string> = []
   let cur = ''
   for (const w of words) {
     const t = cur ? `${cur} ${w}` : w

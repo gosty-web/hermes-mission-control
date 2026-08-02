@@ -1595,8 +1595,41 @@ code {
 }
 
 /* ════════════════════════════════════════════════════════════════════
+   Derived token bridge — every Hermes theme must define a core palette
+   (card, text, muted, accent, border, bg, danger, warning…). These
+   secondary tokens are referenced across the app (skeletons, soft tint
+   pills, secondary text, status chips, hover surfaces, filled accent
+   buttons) but were never declared by the theme blocks, so they computed
+   to empty and rendered as broken transparent surfaces. Derive them from
+   the core palette so they stay coherent in every light + dark theme.
+   ════════════════════════════════════════════════════════════════════ */
+[data-theme] {
+  /* Hover / skeleton / neutral soft surface — subtle text-tinted card */
+  --theme-hover: color-mix(in srgb, var(--theme-text) 9%, var(--theme-card));
+  /* Secondary muted text — dimmer than --theme-muted for footnotes */
+  --theme-muted-2: color-mix(in srgb, var(--theme-muted) 82%, var(--theme-bg));
+  /* Secondary hairline border */
+  --theme-border2: color-mix(in srgb, var(--theme-text) 24%, var(--theme-card));
+  /* Generic subtle shadow (shortcut to the theme's tier-1 elevation) */
+  --theme-shadow: var(--theme-shadow-1);
+  /* Readable foreground on a filled accent background */
+  --theme-on-accent: color-mix(in srgb, var(--theme-text) 88%, var(--theme-accent));
+  /* Accent-tinted soft surfaces + strong accent text */
+  --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 12%, var(--theme-card));
+  --theme-accent-soft-strong: color-mix(in srgb, var(--theme-accent) 22%, var(--theme-card));
+  --theme-accent-strong: var(--theme-accent);
+  /* Status soft surfaces + hairline borders (danger / warning) */
+  --theme-danger-soft: color-mix(in srgb, var(--theme-danger) 13%, var(--theme-card));
+  --theme-danger-soft-strong: color-mix(in srgb, var(--theme-danger) 24%, var(--theme-card));
+  --theme-danger-border: color-mix(in srgb, var(--theme-danger) 42%, transparent);
+  --theme-warning-soft: color-mix(in srgb, var(--theme-warning) 13%, var(--theme-card));
+  --theme-warning-soft-strong: color-mix(in srgb, var(--theme-warning) 24%, var(--theme-card));
+  --theme-warning-border: color-mix(in srgb, var(--theme-warning) 42%, transparent);
+}
+
+/* ════════════════════════════════════════════════════════════════════
    SciFi Theme — imported AFTER all other theme rules so that
-   its CSS variable remaps take precedence over the default
+   its CSS variable overrides take precedence over the default
    Tailwind oklch values and .system dark mode overrides.
    ═══════════════════════════════════════════════════════════════════ */
 @import './scifi-theme.css';

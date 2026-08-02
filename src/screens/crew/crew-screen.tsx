@@ -89,7 +89,7 @@ function StatusDot({ status }: { status: CrewOnlineStatus }) {
 function SkeletonCard() {
   return (
     <div className="rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card)] overflow-hidden animate-pulse">
-      <div className="border-l-[3px] border-l-[#B87333] p-4 h-full">
+      <div className="border-l-2 border-l-[var(--theme-accent-border)] p-4 h-full">
         <div className="flex justify-between mb-3">
           <div className="h-2.5 bg-[var(--theme-hover)] rounded w-16" />
           <div className="h-4 bg-[var(--theme-hover)] rounded w-20" />
@@ -118,9 +118,9 @@ function AgentCard({ member }: { member: CrewMember }) {
   const telegramPlatform = member.platforms.telegram
 
   const borderColor =
-    status === 'online'  ? '#B87333' :
-    status === 'offline' ? '#ef4444' :
-    '#6b7280'
+    status === 'online'  ? 'var(--theme-success)' :
+    status === 'offline' ? 'var(--theme-danger)' :
+    'var(--theme-muted)'
 
   const handleViewTasks = () => {
     void navigate({ to: '/tasks', search: { assignee: member.id } })
@@ -133,13 +133,13 @@ function AgentCard({ member }: { member: CrewMember }) {
   return (
     <div
       className={cn(
-        'rounded-lg border border-[var(--theme-border)] bg-[var(--theme-card)] overflow-hidden',
-        'transition-all duration-200 hover:shadow-[0_4px_16px_rgba(0,0,0,0.35)]',
+        'rounded-xl border border-[var(--theme-border)] bg-[var(--theme-card)] overflow-hidden',
+        'transition-all duration-200 hover:shadow-[var(--theme-shadow-2)] hover:border-[var(--theme-accent-border)]',
         status === 'offline' && 'opacity-70',
       )}
     >
       <div
-        className="border-l-[3px] p-4 h-full flex flex-col gap-3"
+        className="border-l-2 p-4 h-full flex flex-col gap-3"
         style={{ borderLeftColor: borderColor }}
       >
         {/* Top row: status dot + role */}
@@ -151,7 +151,7 @@ function AgentCard({ member }: { member: CrewMember }) {
         </div>
         {/* Agent name + model */}
         <div>
-          <h3 className="text-xl font-bold tracking-tight" style={{ color: '#f59e0b' }}>
+          <h3 className="text-xl font-bold tracking-tight" style={{ color: 'var(--theme-accent)' }}>
             {member.displayName || member.id}
           </h3>
           <p className="text-xs text-[var(--theme-muted)] mt-0.5">
@@ -196,7 +196,7 @@ function AgentCard({ member }: { member: CrewMember }) {
               key={label}
               className="rounded border border-[var(--theme-border)] bg-[var(--theme-hover)] px-2 py-2 text-center"
             >
-              <div className="text-sm font-bold" style={{ color: '#f59e0b' }}>{value}</div>
+              <div className="text-sm font-bold" style={{ color: 'var(--theme-accent)' }}>{value}</div>
               <div className="text-[9px] text-[var(--theme-muted)] uppercase tracking-widest mt-0.5">{label}</div>
             </div>
           ))}
@@ -230,7 +230,7 @@ function AgentCard({ member }: { member: CrewMember }) {
           <button
             type="button"
             onClick={handleViewTasks}
-            className="flex items-center gap-1 text-[11px] text-[var(--theme-muted)] hover:text-[#B87333] hover:bg-[var(--theme-hover)] px-2 py-1 rounded transition-colors -ml-2"
+            className="flex items-center gap-1 text-[11px] text-[var(--theme-muted)] hover:text-[var(--theme-accent)] hover:bg-[var(--theme-hover)] px-2 py-1 rounded transition-colors -ml-2"
           >
             <HugeiconsIcon icon={CheckListIcon} size={12} />
             Tasks
@@ -238,7 +238,7 @@ function AgentCard({ member }: { member: CrewMember }) {
           <button
             type="button"
             onClick={handleViewJobs}
-            className="flex items-center gap-1 text-[11px] text-[var(--theme-muted)] hover:text-[#B87333] hover:bg-[var(--theme-hover)] px-2 py-1 rounded transition-colors -mr-2"
+            className="flex items-center gap-1 text-[11px] text-[var(--theme-muted)] hover:text-[var(--theme-accent)] hover:bg-[var(--theme-hover)] px-2 py-1 rounded transition-colors -mr-2"
           >
             <HugeiconsIcon icon={Clock01Icon} size={12} />
             Cron Jobs
@@ -295,13 +295,13 @@ export function CrewScreen() {
     <div className="flex h-full flex-col gap-6 overflow-auto p-4 md:p-6">
       {/* ── Header ── */}
       <div className="space-y-4">
-        <div className="h-px" style={{ background: 'linear-gradient(to right, #B87333, transparent)' }} />
+        <div className="h-px" style={{ background: 'linear-gradient(to right, var(--theme-accent-border), transparent)' }} />
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="max-w-3xl space-y-2">
             <div>
               <h1
                 className="text-2xl font-bold tracking-[0.18em] uppercase"
-                style={{ color: '#f59e0b' }}
+                style={{ color: 'var(--theme-accent)' }}
               >
                 Crew Status
               </h1>
@@ -335,7 +335,7 @@ export function CrewScreen() {
             disabled={isLoading}
             className={cn(
               'inline-flex items-center gap-2 rounded-full border border-[var(--theme-border)] bg-[var(--theme-card)] px-3 py-2 text-xs font-medium text-[var(--theme-muted)] shadow-sm transition-all',
-              'hover:border-[#B87333]/40 hover:text-[#f59e0b] hover:shadow-[0_0_0_1px_rgba(184,115,51,0.12)]',
+              'hover:border-[var(--theme-accent-border)] hover:text-[var(--theme-accent)] hover:shadow-[0_0_0_1px_var(--theme-accent-border)]',
               'disabled:cursor-not-allowed disabled:opacity-40',
             )}
           >
@@ -347,7 +347,7 @@ export function CrewScreen() {
             Refresh manifest
           </button>
         </div>
-        <div className="h-px" style={{ background: 'linear-gradient(to right, #B87333, transparent)' }} />
+        <div className="h-px" style={{ background: 'linear-gradient(to right, var(--theme-accent-border), transparent)' }} />
       </div>
 
       {/* ── Error state ── */}

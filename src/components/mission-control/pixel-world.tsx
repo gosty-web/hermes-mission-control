@@ -84,6 +84,32 @@ const WAR_ROOM_PLAZA = { x: 1200, y: 800 }
 const ROAD_Y_TOP = GROUND_Y + 300 // 720
 const ROAD_Y_BOTTOM = ROAD_Y_TOP + 290 // 1010
 
+// street lamps along the roads — warm halos + ground pools at night
+const LAMPS: Array<{ x: number; y: number }> = [
+  { x: 640, y: ROAD_Y_TOP + 20 },
+  { x: 1220, y: ROAD_Y_TOP + 20 },
+  { x: 1780, y: ROAD_Y_TOP + 20 },
+  { x: 640, y: ROAD_Y_BOTTOM + 20 },
+  { x: 1220, y: ROAD_Y_BOTTOM + 20 },
+  { x: 1780, y: ROAD_Y_BOTTOM + 20 },
+  { x: 420, y: 880 },
+  { x: 1980, y: 880 },
+  { x: 420, y: 1180 },
+  { x: 1980, y: 1180 },
+]
+
+// tiny world-space particles attached to characters (walk dust, work sparks)
+type DustParticle = {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  life: number
+  max: number
+  size: number
+  color: string
+}
+
 // ── Character state machine ─────────────────────────────────────────────────
 type CharMode = 'idle' | 'walk' | 'work' | 'meeting'
 type CharState = {
@@ -235,15 +261,35 @@ function drawCharacter(ctx: Ctx, c: CharState, time: number) {
   }
 }
 
-function drawBubble(ctx: Ctx, c: CharState, time: number) {
-  if (!c.bubble) return
+// measure a bubble's rect + wrapped lines (font must be set by caller context)
+function bubbleRect(ctx: Ctx, c: CharState): { bx: number; by: number; w: number; h: number; lines: string[] } {
   const maxW = 150
-  const lines = wrapBubbleText(ctx, c.bubble, maxW)
+  const lines = wrapBubbleText(ctx, c.bubble ?? '', maxW)
   const lh = 11
   const h = 10 + lines.length * lh
   const w = lines.reduce((m, l) => Math.max(m, ctx.measureText(l).width), 0) + 14
   const bx = Math.max(10, Math.min(c.x - w / 2, WORLD_W - w - 10))
-  const by = c.y - 34 - (lines.length - 1) * 4 + (c.stuck ? Math.sin(time * 0.004) * 2 : 0)
+  const by = c.y - 34 - (lines.length - 1) * 4
+  return { bx, by, w, h, lines }
+}
+
+// lift overlapping bubbles above the ones already placed, so agents gathered
+// at the war-room plaza can all talk at once without their bubbles colliding
+function stackBubbleRects(rects: Array<{ c: CharState; r: ReturnType<typeof bubbleRect> }>) {
+  const placed: typeof rects = []
+  for (const item of rects) {
+    for (const p of placed) {
+      if (item.r.bx < p.r.bx + p.r.w && item.r.bx + item.r.w > p.r.bx && item.r.by < p.r.by + p.r.h) {
+        item.r.by = p.r.by - item.r.h - 5
+      }
+    }
+    placed.push(item)
+  }
+}
+
+function drawBubbleAt(ctx: Ctx, c: CharState, r: { bx: number; by: number; w: number; h: number; lines: string[] }, time: number) {
+  const { bx, w, h, lines } = r
+  const by = r.by + (c.stuck ? Math.sin(time * 0.004) * 2 : 0)
 
   // pop-in animation when the message changes (scale from 0.6 → 1, tiny overshoot)
   const age = c.bubbleAge
@@ -273,7 +319,7 @@ function drawBubble(ctx: Ctx, c: CharState, time: number) {
   ctx.textAlign = 'center'
   ctx.font = '9px "JetBrains Mono", monospace'
   lines.forEach((line, i) => {
-    ctx.fillText(line, bx + w / 2, by + 12 + i * lh)
+    ctx.fillText(line, bx + w / 2, by + 12 + i * 11)
   })
   ctx.restore()
 }
@@ -381,6 +427,37 @@ function drawBuilding(ctx: Ctx, b: BuildingDef, time: number, night: number, hov
   }
 }
 
+// street lamps: dark poles by day, warm halos + ground light pools at night
+function drawLamps(ctx: Ctx, night: number) {
+  const on = night > 0.25
+  const glowA = on ? (night - 0.25) * 0.85 : 0
+  for (const l of LAMPS) {
+    // pole + arm
+    ctx.fillStyle = '#232a3a'
+    ctx.fillRect(l.x - 1.5, l.y - 16, 3, 16)
+    ctx.fillStyle = '#2f3850'
+    ctx.fillRect(l.x - 4.5, l.y - 17, 9, 3)
+    // lamp head
+    ctx.fillStyle = on ? '#ffd9a0' : '#8a93a6'
+    ctx.fillRect(l.x - 2, l.y - 20, 4, 3)
+    if (glowA > 0.01) {
+      // warm halo
+      const g = ctx.createRadialGradient(l.x, l.y - 18, 2, l.x, l.y - 18, 36)
+      g.addColorStop(0, `rgba(255,200,120,${0.55 * glowA})`)
+      g.addColorStop(1, 'rgba(255,200,120,0)')
+      ctx.fillStyle = g
+      ctx.beginPath()
+      ctx.arc(l.x, l.y - 18, 36, 0, Math.PI * 2)
+      ctx.fill()
+      // light pool on the ground
+      ctx.fillStyle = `rgba(255,190,110,${0.15 * glowA})`
+      ctx.beginPath()
+      ctx.ellipse(l.x, l.y + 1, 24, 6.5, 0, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+}
+
 // ── The component ───────────────────────────────────────────────────────────
 
 export function PixelWorld({
@@ -411,7 +488,12 @@ export function PixelWorld({
     cy: 0,
   })
   const rafRef = useRef<number>(0)
+  const particlesRef = useRef<DustParticle[]>([])
+  // frame-time EMA → adaptive quality (drops particle counts when the box
+  // is struggling, so the loop stays smooth on low-RAM hosts)
+  const perfRef = useRef({ ema: 16, quality: 1 })
   const [hovered, setHovered] = useState<CharState | null>(null)
+  const [hoveredBuilding, setHoveredBuilding] = useState<string | null>(null)
   const [selected, setSelected] = useState<CharState | null>(null)
   const [hudPos, setHudPos] = useState({ x: 0, y: 0 })
   const [zoom, setZoom] = useState(0.55)
@@ -581,6 +663,11 @@ export function PixelWorld({
       const dt = Math.min(32, t - last)
       last = t
       timeRef.current = t
+      // frame-time EMA → quality scaling (cuts particles when the frame
+      // budget slips, so the loop stays smooth on the 2GB box)
+      perfRef.current.ema = perfRef.current.ema * 0.93 + dt * 0.07
+      const ema = perfRef.current.ema
+      perfRef.current.quality = ema > 20 ? 0.5 : ema > 16.5 ? 0.75 : 1
       // day/night: ~2.5 min cycle with SMOOTH transitions (fade in/out,
       // no hard snap) — dusk 0.55→0.75, night holds, dawn 0.88→0.98
       const cycle = (t % 150000) / 150000
@@ -671,6 +758,54 @@ export function PixelWorld({
         // expire bubbles
         if (c.bubbleUntil < now && !c.stuck) {
           c.bubble = c.statusLabel === 'active' ? 'working' : 'standing by'
+        }
+
+        // character-attached particles: dust puffs while walking, colored
+        // sparks while working — the little touches that make the town feel
+        // alive instead of a set of slides
+        const parts = particlesRef.current
+        const quality = perfRef.current.quality
+        if (parts.length < 140) {
+          if (c.mode === 'walk' && Math.random() < 0.4 * quality) {
+            parts.push({
+              x: c.x + (Math.random() * 6 - 3),
+              y: c.y + 9,
+              vx: Math.random() * 0.02 - 0.01 - c.faceDir * 0.014,
+              vy: -0.012 - Math.random() * 0.01,
+              life: 0,
+              max: 340 + Math.random() * 180,
+              size: 2,
+              color: 'rgba(170,175,190,0.55)',
+            })
+          } else if (c.mode === 'work' && Math.random() < 0.05 * quality) {
+            const pal = WORKER_PALETTES[c.workerId] ?? WORKER_PALETTES.orchestrator
+            parts.push({
+              x: c.x + (Math.random() * 10 - 5),
+              y: c.y - 12,
+              vx: Math.random() * 0.02 - 0.01,
+              vy: -0.028 - Math.random() * 0.014,
+              life: 0,
+              max: 380 + Math.random() * 240,
+              size: Math.random() < 0.5 ? 2 : 3,
+              color: pal.light,
+            })
+          }
+        }
+      }
+
+      // advance + cull character particles (dust settles, sparks fall)
+      {
+        const parts = particlesRef.current
+        for (let i = parts.length - 1; i >= 0; i--) {
+          const p = parts[i]
+          p.life += dt
+          if (p.life >= p.max) {
+            parts.splice(i, 1)
+            continue
+          }
+          p.x += p.vx * dt
+          p.y += p.vy * dt
+          p.vy += 0.0038 * (dt / 16)
         }
       }
 
@@ -805,6 +940,9 @@ export function PixelWorld({
       ctx.stroke()
       ctx.setLineDash([])
 
+      // street lamps — warm halos over the roads once dusk falls
+      drawLamps(ctx, night)
+
       // grass tufts + trees
       ctx.fillStyle = night > 0.5 ? '#0d1512' : '#31402e'
       for (let i = 0; i < 40; i++) {
@@ -866,9 +1004,11 @@ export function PixelWorld({
         ctx.fillText(`◈ MISSION ACTIVE ◈`, WAR_ROOM_PLAZA.x, by + 17)
       }
 
-      // ambient particles: fireflies at night, dust motes by day
+      // ambient particles: fireflies at night, dust motes by day (count
+      // scales with the frame-time EMA so low-RAM hosts stay smooth)
+      const nAmb = Math.round((night > 0.4 ? 26 : 18) * perfRef.current.quality)
       if (night > 0.4) {
-        for (let i = 0; i < 26; i++) {
+        for (let i = 0; i < nAmb; i++) {
           const px0 = (i * 89.7 + t * 0.02) % WORLD_W
           const py0 = GROUND_Y + 80 + ((i * 47.3 + t * 0.013) % (WORLD_H - GROUND_Y - 160))
           const flick = Math.sin(t * 0.005 + i * 2.4) > 0.2
@@ -878,7 +1018,7 @@ export function PixelWorld({
           }
         }
       } else {
-        for (let i = 0; i < 18; i++) {
+        for (let i = 0; i < nAmb; i++) {
           const px0 = (i * 71.3 + t * 0.008) % WORLD_W
           const py0 = GROUND_Y + 40 + ((i * 33.7 + t * 0.006) % (WORLD_H - GROUND_Y - 100))
           ctx.fillStyle = 'rgba(255,255,255,0.06)'
@@ -891,10 +1031,21 @@ export function PixelWorld({
       for (const c of sorted) {
         drawCharacter(ctx, c, t)
       }
-      // bubbles on top
-      for (const c of sorted) {
-        drawBubble(ctx, c, t)
+      // character particles (dust / sparks) just above the sprites
+      for (const p of particlesRef.current) {
+        ctx.globalAlpha = Math.max(0, Math.min(1, 1 - p.life / p.max)) * 0.9
+        ctx.fillStyle = p.color
+        ctx.fillRect(Math.round(p.x), Math.round(p.y), p.size, p.size)
       }
+      ctx.globalAlpha = 1
+      // bubbles on top — stacked so gathered agents' bubbles never collide
+      const bubbleItems: Array<{ c: CharState; r: ReturnType<typeof bubbleRect> }> = []
+      for (const c of sorted) {
+        if (!c.bubble) continue
+        bubbleItems.push({ c, r: bubbleRect(ctx, c) })
+      }
+      stackBubbleRects(bubbleItems)
+      for (const item of bubbleItems) drawBubbleAt(ctx, item.c, item.r, t)
 
       // war room label under it — emerald while a mission is live
       ctx.font = '700 14px "JetBrains Mono", monospace'
@@ -949,12 +1100,18 @@ export function PixelWorld({
         }
       }
       hoveredBuildingRef.current = hoveredBuilding
+      setHoveredBuilding((prev) => (prev === hoveredBuilding ? prev : hoveredBuilding))
     },
     [camToWorld],
   )
 
   const handleClick = useCallback(() => {
     if (hovered) setSelected(hovered)
+    else if (hoveredBuildingRef.current) {
+      // clicking an office selects the worker who lives there
+      const w = charsRef.current.find((c) => c.workerId === hoveredBuildingRef.current)
+      if (w) setSelected(w)
+    }
   }, [hovered])
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -1062,6 +1219,14 @@ export function PixelWorld({
     return { rt, h, ch: selected }
   }, [selected, runtime.data, health.data])
 
+  const hoveredBuildingInfo = useMemo(() => {
+    if (!hoveredBuilding) return null
+    const b = BUILDINGS.find((bb) => bb.id === hoveredBuilding)
+    if (!b) return null
+    const w = charsRef.current.find((c) => c.workerId === hoveredBuilding) ?? null
+    return { b, w }
+  }, [hoveredBuilding])
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#0a0e1a]">
       {/* header — glass bar, theme tokens with dark fallbacks so it matches
@@ -1121,6 +1286,7 @@ export function PixelWorld({
         onMouseLeave={() => {
           mouseRef.current.inside = false
           hoveredBuildingRef.current = null
+          setHoveredBuilding(null)
           setHovered(null)
         }}
         onClick={handleClick}
@@ -1133,7 +1299,7 @@ export function PixelWorld({
 
         {/* zoom HUD */}
         <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-white/[0.08] bg-black/40 px-3 py-1 font-mono text-[10px] text-[#7d8597] backdrop-blur-md">
-          {Math.round(zoom * 100)}% · drag to pan · scroll to zoom · click an agent
+          {Math.round(zoom * 100)}% · drag to pan · scroll to zoom · click an agent or office
         </div>
 
         {/* hover tooltip */}
@@ -1159,6 +1325,44 @@ export function PixelWorld({
               {hovered.activeTool ? (
                 <div className="mt-1 font-mono text-[9px] text-indigo-300">tool: {hovered.activeTool}</div>
               ) : null}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* hover tooltip — building variant (office / war room) */}
+        <AnimatePresence>
+          {!hovered && hoveredBuildingInfo && !selected && (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.12 }}
+              className="pointer-events-none absolute z-10 w-52 rounded-xl border border-white/[0.1] bg-[#0d1220]/95 p-3 shadow-2xl backdrop-blur-xl"
+              style={{
+                left: Math.min(hudPos.x + 14, (wrapRef.current?.clientWidth ?? 800) - 220),
+                top: Math.max(hudPos.y - 110, 8),
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-sm" style={{ background: hoveredBuildingInfo.b.roof }} />
+                <span className="text-[11.5px] font-medium tracking-[-0.01em] text-[#f0f2f7]">{hoveredBuildingInfo.b.label}</span>
+                {hoveredBuildingInfo.w ? (
+                  <span className="ml-auto rounded px-1.5 py-px font-mono text-[9px] text-[#7d8597]">
+                    {hoveredBuildingInfo.w.statusLabel}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-1.5 text-[10px] leading-snug text-[#b6bdcb]">
+                {hoveredBuildingInfo.w
+                  ? hoveredBuildingInfo.w.bubble
+                  : hoveredBuildingInfo.b.isWarRoom
+                    ? 'command center — agents gather here'
+                    : 'office — worker away'}
+              </div>
+              {hoveredBuildingInfo.w?.activeTool ? (
+                <div className="mt-1 font-mono text-[9px] text-indigo-300">tool: {hoveredBuildingInfo.w.activeTool}</div>
+              ) : null}
+              <div className="mt-1.5 text-[9px] text-[#5a6172]">click to open worker profile →</div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1240,6 +1444,18 @@ export function PixelWorld({
                       {(selectedWorker.h.skills ?? []).slice(0, 5).map((s: string) => (
                         <span key={s} className="rounded border border-white/[0.07] px-1.5 py-px text-[9px] text-[#7d8597]">
                           {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selectedWorker.h && (selectedWorker.h.capabilities?.length ?? 0) > 0 && (
+                  <div>
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-[#5a6172]">Capabilities</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {(selectedWorker.h.capabilities ?? []).slice(0, 6).map((c: string) => (
+                        <span key={c} className="rounded border border-white/[0.07] px-1.5 py-px text-[9px] text-[#7d8597]">
+                          {c}
                         </span>
                       ))}
                     </div>

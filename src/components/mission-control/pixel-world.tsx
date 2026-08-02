@@ -793,15 +793,13 @@ export function PixelWorld({
         // not stuck) so behavior and mission-gathers stay authoritative.
         if (!missionRunningRef.current && !c.stuck && c.mode === 'idle' && c.route === null) {
           const desk = DESK_BY_WORKER[c.workerId]
-          if (desk) {
-            if (now > c.patrolAt && distTo(c, desk.x, desk.y) < 120) {
-              setDestination(c, desk.x + (Math.random() * 140 - 30), desk.y + (Math.random() * 42 + 6))
-              c.patrolAt = now + 18000 + Math.random() * 15000
-            } else if (now - c.patrolAt > 45000) {
-              // long-quiet baseline: nudge the timer so a patrol never missed
-              // by a poll keeps stretching activity
-              c.patrolAt = now + 8000 + Math.random() * 18000
-            }
+          if (now > c.patrolAt && distTo(c, desk.x, desk.y) < 120) {
+            setDestination(c, desk.x + (Math.random() * 140 - 30), desk.y + (Math.random() * 42 + 6))
+            c.patrolAt = now + 18000 + Math.random() * 15000
+          } else if (now - c.patrolAt > 45000) {
+            // long-quiet baseline: nudge the timer so a patrol never missed
+            // by a poll keeps stretching activity
+            c.patrolAt = now + 8000 + Math.random() * 18000
           }
         }
 
